@@ -9,6 +9,7 @@ Subcommands:
   gguf-run list [--cache-dir <dir>]
   gguf-run pull <model> [--cache-dir <dir>]
   gguf-run rm <model> [--cache-dir <dir>]
+  gguf-run package <model> [--output <dir>] [--name <name>]
 
 Legacy (backward-compatible):
   gguf-run -q <query> [-m <path>] [-p <prompt>] [--cache-dir <dir>] [-- <extra>]
@@ -22,8 +23,11 @@ As a library:
 
 import (
 	"context"
+	"crypto/sha256"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,13 +64,13 @@ func main() {
 		pullCmd(os.Args[2:])
 	case "rm":
 		rmCmd(os.Args[2:])
+	case "package":
+		packageCmd(os.Args[2:])
 	default:
-		// bare model name → run it
 		if !strings.HasPrefix(subcmd, "-") {
 			runCmd(os.Args[1:], "llama-cli", false)
 			return
 		}
-		// backward compat: -q / -m flags
 		legacyMain()
 	}
 }
@@ -78,6 +82,7 @@ func printUsage() {
   gguf-run list                 list cached models
   gguf-run pull <model>         download a model without running it
   gguf-run rm <model>           remove a cached model
+  gguf-run package <model>      create a .cgp package referencing a model
 
 Flags:
   --cache-dir <dir>  model cache directory (default `+defaultCacheDir()+`)
@@ -90,6 +95,8 @@ Examples:
   gguf-run list
   gguf-run pull smollm2-135m
   gguf-run rm smollm2-135m
+  gguf-run package tinyllama
+  gguf-run package ./model.gguf
 `)
 }
 
@@ -261,18 +268,176 @@ func rmCmd(args []string) {
 	fmt.Fprintf(os.Stderr, "\033[32m==>\033[0m Removed %s\n", model)
 }
 
+// ── package ──────────────────────────────────────────────
+
+func packageCmd(args []string) {
+	flags := flag.NewFlagSet("package", flag.ExitOnError)
+	outputDir := flags.String("output", ".", "output directory for the .cgp file")
+	pkgName := flags.String("name", "", "package name (default: derived from model filename)")
+	flags.Parse(args)
+
+	model := flags.Arg(0)
+	if model == "" {
+		fmt.Fprintln(os.Stderr, "Usage: gguf-run package <model> [--output <dir>] [--name <name>]")
+		fmt.Fprintln(os.Stderr, "  <model> can be a search query, URL, or local .gguf file")
+		os.Exit(1)
+	}
+
+	ctx := context.Background()
+
+	ref, name, err := resolveGgufRef(ctx, model)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %v\n", err)
+		os.Exit(1)
+	}
+
+	if *pkgName != "" {
+		name = *pkgName
+	}
+
+	outPath, err := ggufrun.BuildCgp(name, ref, *outputDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "\033[32m==>\033[0m Package created: %s\n", outPath)
+	fmt.Fprintf(os.Stderr, "\033[33m==>\033[0m Install with: cpm install %s\n", filepath.Base(outPath))
+}
+
+func resolveGgufRef(ctx context.Context, model string) (*ggufrun.GgufRef, string, error) {
+	if strings.HasPrefix(model, "http://") || strings.HasPrefix(model, "https://") {
+		return resolveURLRef(ctx, model)
+	}
+	if info, err := os.Stat(model); err == nil && !info.IsDir() {
+		return resolveLocalRef(model, info.Size())
+	}
+	return resolveSearchRef(ctx, model)
+}
+
+func resolveURLRef(ctx context.Context, url string) (*ggufrun.GgufRef, string, error) {
+	filename := filepath.Base(url)
+	name := strings.TrimSuffix(filename, ".gguf")
+	name = strings.TrimSuffix(name, ".GGUF")
+
+	ref := &ggufrun.GgufRef{
+		Source:   "huggingface",
+		URL:      url,
+		Filename: filename,
+	}
+
+	if resp, err := http.Head(url); err == nil && resp.ContentLength > 0 {
+		ref.SizeBytes = resp.ContentLength
+	}
+
+	return ref, name, nil
+}
+
+func resolveLocalRef(path string, size int64) (*ggufrun.GgufRef, string, error) {
+	filename := filepath.Base(path)
+	name := strings.TrimSuffix(filename, ".gguf")
+	name = strings.TrimSuffix(name, ".GGUF")
+
+	ref := &ggufrun.GgufRef{
+		Source:    "local",
+		URL:       "",
+		Filename:  filename,
+		SizeBytes: size,
+	}
+
+	f, err := os.Open(path)
+	if err == nil {
+		defer f.Close()
+		h := sha256.New()
+		if _, err := io.Copy(h, f); err == nil {
+			ref.SHA256 = fmt.Sprintf("%x", h.Sum(nil))
+		}
+	}
+
+	return ref, name, nil
+}
+
+func resolveSearchRef(ctx context.Context, query string) (*ggufrun.GgufRef, string, error) {
+	fmt.Fprintf(os.Stderr, "\033[32m==>\033[0m Searching: %s\n", query)
+
+	res, err := ggufrun.SearchBest(ctx, query, 20)
+	if err != nil {
+		return nil, "", err
+	}
+
+	quant := extractQuant(res.Filename)
+	name := strings.TrimSuffix(res.Filename, ".gguf")
+	name = strings.TrimSuffix(name, ".GGUF")
+
+	ref := &ggufrun.GgufRef{
+		Source:   "huggingface",
+		ModelID:  res.ModelID,
+		URL:      res.URL,
+		Filename: res.Filename,
+		Quant:    quant,
+	}
+
+	if resp, err := http.Head(res.URL); err == nil && resp.ContentLength > 0 {
+		ref.SizeBytes = resp.ContentLength
+	}
+
+	fmt.Fprintf(os.Stderr, "\033[32m==>\033[0m Selected: %s\n", filepath.Base(res.URL))
+	return ref, name, nil
+}
+
+func extractQuant(filename string) string {
+	parts := strings.Split(strings.ToUpper(filename), ".")
+	for _, p := range parts {
+		if strings.Contains(p, "Q") && (strings.Contains(p, "K") || strings.Contains(p, "_")) {
+			return p
+		}
+	}
+	return ""
+}
+
 // ── model resolution ─────────────────────────────────────
 
 func resolveModel(ctx context.Context, model, cacheDir string) (string, error) {
 	if strings.HasPrefix(model, "http://") || strings.HasPrefix(model, "https://") {
 		return ggufrun.Download(ctx, model, cacheDir)
 	}
-	if _, err := os.Stat(model); err == nil {
+	if info, err := os.Stat(model); err == nil {
+		if info.IsDir() {
+			if isCgpDir(model) {
+				return resolveCgpDir(ctx, model, cacheDir)
+			}
+			return "", fmt.Errorf("is a directory: %s", model)
+		}
+		if strings.HasSuffix(model, ".cgp") {
+			return resolveCgpFile(ctx, model, cacheDir)
+		}
 		return model, nil
 	}
-	// treat as search query
 	fmt.Fprintf(os.Stderr, "\033[32m==>\033[0m Searching: %s\n", model)
 	return ggufrun.SearchAndDownload(ctx, model, cacheDir)
+}
+
+func isCgpDir(path string) bool {
+	_, err := os.Stat(filepath.Join(path, "cognitive.json"))
+	return err == nil
+}
+
+func resolveCgpFile(ctx context.Context, path, cacheDir string) (string, error) {
+	ref, err := ggufrun.ReadGgufRef(path)
+	if err != nil {
+		return "", fmt.Errorf("read .cgp: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "\033[32m==>\033[0m Using gguf reference from %s\n", filepath.Base(path))
+	return ggufrun.Download(ctx, ref.URL, cacheDir)
+}
+
+func resolveCgpDir(ctx context.Context, path, cacheDir string) (string, error) {
+	ref, err := ggufrun.ReadGgufRef(path)
+	if err != nil {
+		return "", fmt.Errorf("read cgp directory: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "\033[32m==>\033[0m Using gguf reference from %s\n", path)
+	return ggufrun.Download(ctx, ref.URL, cacheDir)
 }
 
 // ── legacy entry point (backward compat) ─────────────────
