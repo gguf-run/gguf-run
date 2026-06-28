@@ -13,6 +13,7 @@ Requires [Go 1.22+](https://go.dev/dl/). Make sure `$GOPATH/bin` is in your `PAT
 ## Quick start
 
 ```bash
+gguf-run install                           # install llama-cli + llama-server
 gguf-run run tinyllama                     # search, download, interactive chat
 gguf-run run qwen2.5-1.5b -p "Hi"          # single-shot prompt
 gguf-run server phi-2 --addr :8080         # HTTP API server
@@ -20,6 +21,26 @@ gguf-run list                              # show cached models
 ```
 
 ## Subcommands
+
+### `install` — install llama.cpp
+
+```bash
+gguf-run install
+```
+
+Installs `llama-cli` and `llama-server` using the best method for your platform:
+
+| Platform | Method | Fallback |
+|----------|--------|----------|
+| macOS | `brew install llama.cpp` | Build from source via cmake |
+| Linux (Debian/Ubuntu) | `sudo apt-get install llama.cpp` | Build from source via cmake |
+| Linux (Fedora) | `sudo dnf install llama.cpp` | Build from source via cmake |
+| Linux (Arch) | `sudo pacman -S llama.cpp` | Build from source via cmake |
+| Linux (Alpine) | `apk add llama.cpp` | Build from source via cmake |
+| Linux (openSUSE) | `sudo zypper install llama.cpp` | Build from source via cmake |
+| Windows | `vcpkg install llama.cpp` | Build from source via cmake |
+
+This is a **one-time setup** — after it completes, `gguf-run run` and `gguf-run server` will skip the install step and launch immediately.
 
 ### `run <model>` — search, download, and run
 
@@ -162,20 +183,6 @@ gguf-run -q phi -- --temp 0.8 --ctx-size 4096 -ngl 999
 |----------|-------------|
 | `LLAMACPP_DIR` | Path to llama.cpp installation (looks for `bin/llama-cli`) |
 | `XDG_CACHE_HOME` | Override cache base directory (default: `~/.cache`) |
-
-## llama.cpp auto-install
-
-If `llama-cli` (or `llama-server`) is not found, `gguf-run` offers to install it:
-
-| Platform | Package manager | Fallback |
-|----------|-----------------|----------|
-| macOS | `brew install llama.cpp` | Build from source via cmake |
-| Linux (Debian/Ubuntu) | `sudo apt-get install llama.cpp` | Build from source via cmake |
-| Linux (Fedora) | `sudo dnf install llama.cpp` | Build from source via cmake |
-| Linux (Arch) | `sudo pacman -S llama.cpp` | Build from source via cmake |
-| Linux (Alpine) | `apk add llama.cpp` | Build from source via cmake |
-| Linux (openSUSE) | `sudo zypper install llama.cpp` | Build from source via cmake |
-| Windows | `vcpkg install llama.cpp` | Build from source via cmake |
 
 ## Library
 
