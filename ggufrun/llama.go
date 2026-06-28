@@ -90,7 +90,10 @@ func installOnLinux() error {
 		{"dnf", []string{"install", "-y", "llama.cpp"}, "dnf"},
 		{"pacman", []string{"-S", "--noconfirm", "llama.cpp"}, "pacman"},
 		{"zypper", []string{"install", "-y", "llama.cpp"}, "zypper"},
+		{"apk", []string{"add", "llama.cpp"}, "apk"},
 	}
+
+	elevate := privilegeCmd()
 
 	for _, pm := range pkgManagers {
 		if _, err := exec.LookPath(pm.cmd); err != nil {
@@ -98,7 +101,12 @@ func installOnLinux() error {
 		}
 		fmt.Fprintf(os.Stderr, "\033[32m==>\033[0m Installing llama.cpp via %s...\n", pm.desc)
 		args := append([]string{pm.cmd}, pm.args...)
-		cmd := exec.Command("sudo", args...)
+		var cmd *exec.Cmd
+		if elevate == "" {
+			cmd = exec.Command(pm.cmd, pm.args...)
+		} else {
+			cmd = exec.Command(elevate, args...)
+		}
 		cmd.Stdout = os.Stderr
 		cmd.Stderr = os.Stderr
 		cmd.Stdin = os.Stdin
@@ -109,6 +117,20 @@ func installOnLinux() error {
 		break
 	}
 	return buildFromSource()
+}
+
+// privilegeCmd returns the privilege-elevation command to use (e.g. "sudo",
+// "doas"), or empty string if already running as root.
+func privilegeCmd() string {
+	if os.Geteuid() == 0 {
+		return ""
+	}
+	for _, name := range []string{"sudo", "doas"} {
+		if _, err := exec.LookPath(name); err == nil {
+			return name
+		}
+	}
+	return ""
 }
 
 func installOnWindows() error {
