@@ -267,12 +267,29 @@ func rmCmd(args []string) {
 // ── package ──────────────────────────────────────────────
 
 func packageCmd(args []string) {
-	flags := flag.NewFlagSet("package", flag.ExitOnError)
-	outputDir := flags.String("output", ".", "output directory for the .cgp file")
-	pkgName := flags.String("name", "", "package name (default: derived from model filename)")
-	flags.Parse(args)
+	outputDir := "."
+	pkgName := ""
+	var model string
 
-	model := flags.Arg(0)
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--output":
+			if i+1 < len(args) {
+				outputDir = args[i+1]
+				i++
+			}
+		case "--name":
+			if i+1 < len(args) {
+				pkgName = args[i+1]
+				i++
+			}
+		default:
+			if model == "" {
+				model = args[i]
+			}
+		}
+	}
+
 	if model == "" {
 		fmt.Fprintln(os.Stderr, "Usage: gguf-run package <model> [--output <dir>] [--name <name>]")
 		fmt.Fprintln(os.Stderr, "  <model> can be a search query, URL, or local .gguf file")
@@ -287,11 +304,11 @@ func packageCmd(args []string) {
 		os.Exit(1)
 	}
 
-	if *pkgName != "" {
-		name = *pkgName
+	if pkgName != "" {
+		name = pkgName
 	}
 
-	outPath, err := ggufrun.BuildCgp(name, ref, *outputDir)
+	outPath, err := ggufrun.BuildCgp(name, ref, outputDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %v\n", err)
 		os.Exit(1)
