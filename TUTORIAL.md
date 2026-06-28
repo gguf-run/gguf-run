@@ -17,6 +17,7 @@ full lifecycle: creating, inspecting, installing, and running `.cgp` packages.
 6. [Running models from .cgp packages](#6-running-models-from-cgp-packages)
 7. [Publishing to a registry](#7-publishing-to-a-registry)
 8. [Reference: cognitive.json fields](#8-reference-cognitivejson-fields)
+9. [Testing in Alpine Docker](#9-testing-in-alpine-docker)
 
 ---
 
@@ -366,6 +367,76 @@ cpm install tinyllama-1.1b --registry https://my-registry.example.com
 
 \* At least one of `weights.remote.url` or actual files in `weights/`
    is expected for packages that provide model inference.
+
+---
+
+## 9. Testing in Alpine Docker
+
+Use an Alpine container to verify the `apk` install path and source-build
+fallback in a clean Linux environment.
+
+### Quick smoke test (interactive)
+
+```bash
+docker run -it --rm alpine:edge sh
+
+# inside the container:
+apk add go git cmake g++ linux-headers
+go install github.com/gguf-run/gguf-run@latest
+export PATH="/root/go/bin:$PATH"
+
+# test the full pipeline: search → download → run
+gguf-run run tinyllama -p "hello"
+```
+
+This exercises:
+
+| Code path | Alpine behavior |
+|-----------|----------------|
+| `privilegeCmd()` | Returns `""` — running as root in Docker, no `sudo` |
+| `installOnLinux()` → `apk` | `apk add llama.cpp` from `edge/community` |
+| `findBinary()` | `exec.LookPath` + `~/.local/bin` fallback checks |
+| `SearchAndDownload()` | Hugging Face API search + download |
+| `Run()` | Spawns `llama-cli` with the downloaded model |
+
+### With a Dockerfile
+
+```dockerfile
+FROM alpine:edge
+
+RUN apk add --no-cache go git cmake g++ linux-headers \
+    && go install github.com/gguf-run/gguf-run@latest \
+    && rm -rf /var/cache/apk/*
+
+ENV PATH="/root/go/bin:${PATH}"
+
+ENTRYPOINT ["gguf-run"]
+```
+
+Build and run:
+
+```bash
+docker build -t gguf-run-test .
+docker run --rm gguf-run-test run tinyllama -p "hello"
+```
+
+### Test the source-build fallback
+
+If you want to verify the `cmake` source build path (skipping the `apk`
+package entirely), use an older Alpine release where `llama.cpp` is not
+in the repos:
+
+```bash
+docker run -it --rm alpine:3.20 sh
+
+apk add go git cmake g++ linux-headers
+go install github.com/gguf-run/gguf-run@latest
+
+# llama.cpp won't be in the repo, so InstallLlamaCpp() will
+# fall through to buildFromSource() which clones, cmakes, and
+# installs to ~/.local/bin
+gguf-run run tinyllama -p "hello"
+```
 
 ---
 
