@@ -385,10 +385,8 @@ apk add go git cmake g++ linux-headers
 go install github.com/gguf-run/gguf-run@latest
 export PATH="/root/go/bin:$PATH"
 
-# install llama.cpp first (one-time setup)
-gguf-run install
-
 # test the full pipeline: search → download → run
+# (llama.cpp auto-installs on first run)
 gguf-run run tinyllama -p "hello"
 ```
 
@@ -413,9 +411,6 @@ RUN apk add --no-cache go git cmake g++ linux-headers \
 
 ENV PATH="/root/go/bin:${PATH}"
 
-# install llama.cpp at build time so run is fast
-RUN gguf-run install
-
 ENTRYPOINT ["gguf-run"]
 ```
 
@@ -438,10 +433,9 @@ docker run -it --rm alpine:3.20 sh
 apk add go git cmake g++ linux-headers
 go install github.com/gguf-run/gguf-run@latest
 
-# llama.cpp won't be in the repo, so install will
+# llama.cpp won't be in the repo, so first run will
 # fall through to buildFromSource() which clones, cmakes, and
 # installs to ~/.local/bin
-gguf-run install
 gguf-run run tinyllama -p "hello"
 ```
 

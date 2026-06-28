@@ -13,34 +13,16 @@ Requires [Go 1.22+](https://go.dev/dl/). Make sure `$GOPATH/bin` is in your `PAT
 ## Quick start
 
 ```bash
-gguf-run install                           # install llama-cli + llama-server
-gguf-run run tinyllama                     # search, download, interactive chat
-gguf-run run qwen2.5-1.5b -p "Hi"          # single-shot prompt
+go install github.com/gguf-run/gguf-run@latest
+gguf-run run tinyllama                     # installs llama.cpp, then runs
+gguf-run run qwen2.5-1.5b -p "Hi"          # second run: fast, no install
 gguf-run server phi-2 --addr :8080         # HTTP API server
 gguf-run list                              # show cached models
 ```
 
+llama.cpp is installed **automatically on first launch** — no separate step needed.
+
 ## Subcommands
-
-### `install` — install llama.cpp
-
-```bash
-gguf-run install
-```
-
-Installs `llama-cli` and `llama-server` using the best method for your platform:
-
-| Platform | Method | Fallback |
-|----------|--------|----------|
-| macOS | `brew install llama.cpp` | Build from source via cmake |
-| Linux (Debian/Ubuntu) | `sudo apt-get install llama.cpp` | Build from source via cmake |
-| Linux (Fedora) | `sudo dnf install llama.cpp` | Build from source via cmake |
-| Linux (Arch) | `sudo pacman -S llama.cpp` | Build from source via cmake |
-| Linux (Alpine) | `apk add llama.cpp` | Build from source via cmake |
-| Linux (openSUSE) | `sudo zypper install llama.cpp` | Build from source via cmake |
-| Windows | `vcpkg install llama.cpp` | Build from source via cmake |
-
-This is a **one-time setup** — after it completes, `gguf-run run` and `gguf-run server` will skip the install step and launch immediately.
 
 ### `run <model>` — search, download, and run
 
@@ -105,6 +87,25 @@ Removes the model file from cache. The `<model>` argument matches by:
 - Exact filename (e.g., `model.q4_k_m.gguf`)
 - Name without `.gguf` extension (e.g., `model.q4_k_m`)
 - Partial name (e.g., `tinyllama` matches any cached file containing "tinyllama")
+
+### `install` — re-install / upgrade llama.cpp
+
+Normally not needed — llama.cpp is installed automatically on first run.
+Use this to upgrade or re-install:
+
+```bash
+gguf-run install
+```
+
+| Platform | Method | Fallback |
+|----------|--------|----------|
+| macOS | `brew install llama.cpp` | Build from source via cmake |
+| Linux (Debian/Ubuntu) | `sudo apt-get install llama.cpp` | Build from source via cmake |
+| Linux (Fedora) | `sudo dnf install llama.cpp` | Build from source via cmake |
+| Linux (Arch) | `sudo pacman -S llama.cpp` | Build from source via cmake |
+| Linux (Alpine) | `apk add llama.cpp` | Build from source via cmake |
+| Linux (openSUSE) | `sudo zypper install llama.cpp` | Build from source via cmake |
+| Windows | `vcpkg install llama.cpp` | Build from source via cmake |
 
 ### `package <model>` — create a `.cgp` package
 

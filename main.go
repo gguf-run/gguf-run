@@ -4,13 +4,13 @@ package main
 gguf-run — search, download, and run GGUF models with llama.cpp.
 
 Subcommands:
-  gguf-run install
   gguf-run run <model> [-p <prompt>] [--cache-dir <dir>] [-- <extra>]
   gguf-run server <model> [--addr <host:port>] [--cache-dir <dir>] [-- <extra>]
   gguf-run list [--cache-dir <dir>]
   gguf-run pull <model> [--cache-dir <dir>]
   gguf-run rm <model> [--cache-dir <dir>]
   gguf-run package <model> [--output <dir>] [--name <name>]
+  gguf-run install              re-install / upgrade llama.cpp
 
 Legacy (backward-compatible):
   gguf-run -q <query> [-m <path>] [-p <prompt>] [--cache-dir <dir>] [-- <extra>]
@@ -52,6 +52,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	ensureLlamaCpp()
+
 	subcmd := os.Args[1]
 
 	switch subcmd {
@@ -80,20 +82,19 @@ func main() {
 
 func printUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
-  gguf-run install              install llama.cpp (llama-cli + llama-server)
   gguf-run run <model>          search, download, and run a model
   gguf-run server <model>       serve a model via HTTP API
   gguf-run list                 list cached models
   gguf-run pull <model>         download a model without running it
   gguf-run rm <model>           remove a cached model
   gguf-run package <model>      create a .cgp package referencing a model
+  gguf-run install              re-install / upgrade llama.cpp
 
 Flags:
   --cache-dir <dir>  model cache directory (default `+defaultCacheDir()+`)
   -p <prompt>        single-shot prompt (default: interactive)
 
 Examples:
-  gguf-run install
   gguf-run run tinyllama
   gguf-run run qwen2.5-1.5b -p "What is the capital of France?"
   gguf-run server phi -- --port 8080
@@ -135,9 +136,8 @@ func runCmd(args []string, binary string, isServer bool) {
 
 	binPath := findBinary(binary)
 	if binPath == "" {
-		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %s not found. Install it first:\n", binary)
-		fmt.Fprintf(os.Stderr, "  gguf-run install\n\n")
-		fmt.Fprintf(os.Stderr, "Or set LLAMACPP_DIR to your llama.cpp installation path.\n")
+		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %s not found\n", binary)
+		fmt.Fprint(os.Stderr, "Set LLAMACPP_DIR to your llama.cpp installation path.\n")
 		os.Exit(1)
 	}
 
@@ -390,7 +390,21 @@ func extractQuant(filename string) string {
 	return ""
 }
 
-// ── install ───────────────────────────────────────────────
+// ── first-launch dependency check ────────────────────────
+
+func ensureLlamaCpp() {
+	if ggufrun.FindLlamaCli() != "" {
+		return
+	}
+	fmt.Fprint(os.Stderr, "\033[33m==>\033[0m llama-cli not found — installing llama.cpp...\n")
+	if err := ggufrun.InstallLlamaCpp(); err != nil {
+		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %v\n", err)
+		fmt.Fprint(os.Stderr, "Set LLAMACPP_DIR to your llama.cpp installation path and try again.\n")
+		os.Exit(1)
+	}
+}
+
+// ── install (re-install / upgrade) ────────────────────────
 
 func installCmd() {
 	if err := ggufrun.InstallLlamaCpp(); err != nil {
@@ -464,9 +478,8 @@ func legacyMain() {
 
 	binPath := findBinary("llama-cli")
 	if binPath == "" {
-		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m llama-cli not found. Install it first:\n")
-		fmt.Fprintf(os.Stderr, "  gguf-run install\n\n")
-		fmt.Fprintf(os.Stderr, "Or set LLAMACPP_DIR to your llama.cpp installation path.\n")
+		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m llama-cli not found\n")
+		fmt.Fprint(os.Stderr, "Set LLAMACPP_DIR to your llama.cpp installation path.\n")
 		os.Exit(1)
 	}
 
