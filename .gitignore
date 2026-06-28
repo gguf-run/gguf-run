@@ -2,6 +2,9 @@
 /gguf-run
 /gguf-run.exe
 
+# Local dev workspace
+go.work
+
 # IDE
 .idea/
 .vscode/
