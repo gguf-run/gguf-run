@@ -10,29 +10,27 @@ import (
 	"strings"
 )
 
-// FindLlamaCli returns the path to the llama-cli binary.
-// Checks (in order): LLAMACPP_DIR env var, PATH, and common platform locations.
-func FindLlamaCli() string {
+func findBinary(name string) string {
 	if dir := os.Getenv("LLAMACPP_DIR"); dir != "" {
-		p := filepath.Join(dir, "bin", "llama-cli")
+		p := filepath.Join(dir, "bin", name)
 		if fileExists(p) {
 			return p
 		}
 	}
-	if p, err := exec.LookPath("llama-cli"); err == nil {
+	if p, err := exec.LookPath(name); err == nil {
 		return p
 	}
 
 	home, _ := os.UserHomeDir()
 	candidates := []string{
-		filepath.Join(home, ".local", "bin", "llama-cli"),
-		"/usr/local/bin/llama-cli",
+		filepath.Join(home, ".local", "bin", name),
+		"/usr/local/bin/" + name,
 	}
 
 	if runtime.GOOS == "darwin" {
 		candidates = append(candidates,
-			"/usr/local/opt/llama.cpp/bin/llama-cli",
-			"/opt/homebrew/opt/llama.cpp/bin/llama-cli",
+			"/usr/local/opt/llama.cpp/bin/"+name,
+			"/opt/homebrew/opt/llama.cpp/bin/"+name,
 		)
 	}
 
@@ -43,6 +41,9 @@ func FindLlamaCli() string {
 	}
 	return ""
 }
+
+func FindLlamaCli() string   { return findBinary("llama-cli") }
+func FindLlamaServer() string { return findBinary("llama-server") }
 
 // InstallLlamaCpp installs llama.cpp using the best method for the current
 // platform: Homebrew on macOS, system package manager on Linux, vcpkg on
@@ -183,7 +184,7 @@ func buildFromSource() error {
 		"-DCMAKE_INSTALL_PREFIX="+installPrefix,
 		"-DLLAMA_BUILD_TESTS=OFF",
 		"-DLLAMA_BUILD_EXAMPLES=ON",
-		"-DLLAMA_BUILD_SERVER=OFF",
+		"-DLLAMA_BUILD_SERVER=ON",
 		srcDir)
 	cfg.Stdout = os.Stderr
 	cfg.Stderr = os.Stderr
@@ -193,7 +194,7 @@ func buildFromSource() error {
 
 	fmt.Fprint(os.Stderr, "\033[32m==>\033[0m Building llama.cpp (this may take a while)...\n")
 	bld := exec.Command("cmake", "--build", filepath.Join(srcDir, "build"),
-		"--config", "Release", "--target", "llama-cli", "--parallel")
+		"--config", "Release", "--target", "llama-cli", "--target", "llama-server", "--parallel")
 	bld.Stdout = os.Stderr
 	bld.Stderr = os.Stderr
 	if err := bld.Run(); err != nil {
