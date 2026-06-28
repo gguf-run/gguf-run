@@ -10,7 +10,7 @@ Subcommands:
   gguf-run pull <model> [--cache-dir <dir>]
   gguf-run rm <model> [--cache-dir <dir>]
   gguf-run package <model> [--output <dir>] [--name <name>]
-  gguf-run install              re-install / upgrade llama.cpp
+  gguf-run install llama.cpp    re-install / upgrade llama.cpp
 
 Legacy (backward-compatible):
   gguf-run -q <query> [-m <path>] [-p <prompt>] [--cache-dir <dir>] [-- <extra>]
@@ -68,7 +68,7 @@ func main() {
 	case "rm":
 		rmCmd(os.Args[2:])
 	case "install":
-		installCmd()
+		installCmd(os.Args[2:])
 	case "package":
 		packageCmd(os.Args[2:])
 	default:
@@ -88,7 +88,7 @@ func printUsage() {
   gguf-run pull <model>         download a model without running it
   gguf-run rm <model>           remove a cached model
   gguf-run package <model>      create a .cgp package referencing a model
-  gguf-run install              re-install / upgrade llama.cpp
+  gguf-run install llama.cpp    re-install / upgrade llama.cpp
 
 Flags:
   --cache-dir <dir>  model cache directory (default `+defaultCacheDir()+`)
@@ -406,7 +406,16 @@ func ensureLlamaCpp() {
 
 // ── install (re-install / upgrade) ────────────────────────
 
-func installCmd() {
+func installCmd(args []string) {
+	what := "llama.cpp"
+	if len(args) > 0 {
+		what = args[0]
+	}
+	if what != "llama.cpp" {
+		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m unknown: %s\n", what)
+		fmt.Fprint(os.Stderr, "Usage: gguf-run install llama.cpp\n")
+		os.Exit(1)
+	}
 	if err := ggufrun.InstallLlamaCpp(); err != nil {
 		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %v\n", err)
 		os.Exit(1)

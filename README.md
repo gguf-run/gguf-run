@@ -88,13 +88,13 @@ Removes the model file from cache. The `<model>` argument matches by:
 - Name without `.gguf` extension (e.g., `model.q4_k_m`)
 - Partial name (e.g., `tinyllama` matches any cached file containing "tinyllama")
 
-### `install` — re-install / upgrade llama.cpp
+### `install llama.cpp` — re-install / upgrade llama.cpp
 
 Normally not needed — llama.cpp is installed automatically on first run.
 Use this to upgrade or re-install:
 
 ```bash
-gguf-run install
+gguf-run install llama.cpp
 ```
 
 | Platform | Method | Fallback |
