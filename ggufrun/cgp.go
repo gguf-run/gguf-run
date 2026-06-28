@@ -32,6 +32,10 @@ type GgufRef struct {
 	SHA256    string `json:"sha256,omitempty"`
 }
 
+type Weights struct {
+	Remote *GgufRef `json:"remote,omitempty"`
+}
+
 type CgpManifest struct {
 	Name              string     `json:"name"`
 	Version           string     `json:"version"`
@@ -41,7 +45,7 @@ type CgpManifest struct {
 	MinCognitiveOSVer string     `json:"min_cognitiveos_version,omitempty"`
 	Dependencies      []string   `json:"dependencies,omitempty"`
 	Runtime           *Runtime   `json:"runtime,omitempty"`
-	Gguf              *GgufRef   `json:"gguf,omitempty"`
+	Weights           *Weights   `json:"weights,omitempty"`
 	Prompts           []string   `json:"prompts,omitempty"`
 	Tools             []string   `json:"tools,omitempty"`
 	Checksum          *Checksum  `json:"checksum,omitempty"`
@@ -95,10 +99,10 @@ func ReadGgufRef(path string) (*GgufRef, error) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return nil, fmt.Errorf("invalid cognitive.json: %w", err)
 	}
-	if manifest.Gguf == nil || manifest.Gguf.URL == "" {
-		return nil, fmt.Errorf("no gguf URL reference in %s", path)
+	if manifest.Weights == nil || manifest.Weights.Remote == nil || manifest.Weights.Remote.URL == "" {
+		return nil, fmt.Errorf("no weights.remote URL in %s", path)
 	}
-	return manifest.Gguf, nil
+	return manifest.Weights.Remote, nil
 }
 
 func BuildCgp(name string, ref *GgufRef, outputDir string) (string, error) {
@@ -134,7 +138,7 @@ func BuildCgp(name string, ref *GgufRef, outputDir string) (string, error) {
 			MemoryMB:     memoryMB,
 			Capabilities: []string{"text-generation"},
 		},
-		Gguf:    ref,
+		Weights: &Weights{Remote: ref},
 		Prompts: []string{"prompts/system.md"},
 		Checksum: &Checksum{
 			SHA256: "0000000000000000000000000000000000000000000000000000000000000000",

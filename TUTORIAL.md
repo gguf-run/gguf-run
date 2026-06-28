@@ -37,20 +37,22 @@ what model it references, how much memory it needs, what hardware it requires,
 and optional MCP servers or prompt templates.
 
 For GGUF models, the `.cgp` contains **metadata only** — the actual GGUF
-binary stays in `gguf-run`'s cache. The `gguf` section inside `cognitive.json`
-points to the Hugging Face download URL:
+binary stays in `gguf-run`'s cache. The `remote` key under `weights` inside
+`cognitive.json` points to the Hugging Face download URL:
 
 ```json
 {
   "name": "tinyllama-1.1b",
   "version": "1.0.0",
   "description": "TinyLlama 1.1B Chat Q4_K_M GGUF",
-  "gguf": {
-    "source": "huggingface",
-    "url": "https://huggingface.co/TheBloke/.../tinyllama-1.1b.Q4_K_M.gguf",
-    "filename": "tinyllama-1.1b.Q4_K_M.gguf",
-    "quant": "Q4_K_M",
-    "size_bytes": 637800000
+  "weights": {
+    "remote": {
+      "source": "huggingface",
+      "url": "https://huggingface.co/TheBloke/.../tinyllama-1.1b.Q4_K_M.gguf",
+      "filename": "tinyllama-1.1b.Q4_K_M.gguf",
+      "quant": "Q4_K_M",
+      "size_bytes": 637800000
+    }
   },
   "checksum": {
     "sha256": "fab3c05314bc94605c9c041c6a2f7dbc..."
@@ -172,13 +174,15 @@ tar -xzf tinyllama-1.1b.cgp -O cognitive.json | jq .
     "memory_mb": 1276,
     "capabilities": ["text-generation"]
   },
-  "gguf": {
-    "source": "huggingface",
-    "model_id": "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF",
-    "url": "https://huggingface.co/TheBloke/.../tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-    "filename": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-    "quant": "Q4_K_M",
-    "size_bytes": 637800000
+  "weights": {
+    "remote": {
+      "source": "huggingface",
+      "model_id": "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF",
+      "url": "https://huggingface.co/TheBloke/.../tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+      "filename": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+      "quant": "Q4_K_M",
+      "size_bytes": 637800000
+    }
   },
   "prompts": ["prompts/system.md"],
   "checksum": {
@@ -306,7 +310,7 @@ When you run `gguf-run run model.cgp`:
 1. Detect .cgp extension or cognitive.json in the directory
 2. Open archive (or read directory)
 3. Parse cognitive.json
-4. Extract gguf.url field
+4. Extract weights.remote.url field
 5. Download GGUF to cache (~/.cache/gguf/) if not cached
 6. Validate GGUF magic bytes
 7. Find llama-cli (or prompt to install via cpm/pkg manager)
@@ -346,22 +350,22 @@ cpm install tinyllama-1.1b --registry https://my-registry.example.com
 | `description` | string | no | Human-readable description |
 | `author` | string | no | Package author |
 | `license` | string | no | SPDX license identifier |
-| `gguf` | object | no* | GGUF model reference |
-| `gguf.source` | string | no | Source platform (`huggingface`, `local`) |
-| `gguf.model_id` | string | no | Hugging Face model ID |
-| `gguf.url` | string | no* | Download URL for the GGUF file |
-| `gguf.filename` | string | no | GGUF filename |
-| `gguf.quant` | string | no | Quantization (e.g. `Q4_K_M`) |
-| `gguf.size_bytes` | int | no | File size in bytes |
-| `gguf.sha256` | string | no | SHA-256 checksum of the GGUF file |
+| `weights.remote` | object | no* | Remote GGUF model reference |
+| `weights.remote.source` | string | no | Source platform (`huggingface`, `local`) |
+| `weights.remote.model_id` | string | no | Hugging Face model ID |
+| `weights.remote.url` | string | no* | Download URL for the GGUF file |
+| `weights.remote.filename` | string | no | GGUF filename |
+| `weights.remote.quant` | string | no | Quantization (e.g. `Q4_K_M`) |
+| `weights.remote.size_bytes` | int | no | File size in bytes |
+| `weights.remote.sha256` | string | no | SHA-256 checksum of the GGUF file |
 | `runtime.memory_mb` | int | no | Suggested RAM allocation |
 | `runtime.capabilities` | [string] | no | Required capabilities |
 | `checksum.sha256` | string | yes | SHA-256 of the `.cgp` archive itself |
 | `prompts` | [string] | no | Paths to prompt files |
 | `tools` | [string] | no | Glob patterns for tool executables |
 
-\* At least one of `gguf.url` or `weights/` directory is expected
-   for packages that provide model inference.
+\* At least one of `weights.remote.url` or actual files in `weights/`
+   is expected for packages that provide model inference.
 
 ---
 
