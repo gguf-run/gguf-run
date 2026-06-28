@@ -23,6 +23,7 @@ As a library:
 */
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"flag"
@@ -415,6 +416,13 @@ func installCmd(args []string) {
 		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m unknown: %s\n", what)
 		fmt.Fprint(os.Stderr, "Usage: gguf-run install llama.cpp\n")
 		os.Exit(1)
+	}
+	if ggufrun.FindLlamaCli() != "" {
+		fmt.Fprint(os.Stderr, "\033[33m==>\033[0m llama-cli already installed. Upgrade? [y/N]: ")
+		scanner := bufio.NewScanner(os.Stdin)
+		if !scanner.Scan() || strings.TrimSpace(scanner.Text()) != "y" {
+			return
+		}
 	}
 	if err := ggufrun.InstallLlamaCpp(); err != nil {
 		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %v\n", err)
