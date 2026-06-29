@@ -1,7 +1,7 @@
 package main
 
 /*
-gguf-run — search, download, and run GGUF models with llama.cpp.
+gguf-run — search, download, and run GGUF models with embedded llama.cpp.
 
 Subcommands:
   gguf-run run <model> [-p <prompt>] [--cache-dir <dir>] [-- <extra>]
@@ -10,10 +10,6 @@ Subcommands:
   gguf-run pull <model> [--cache-dir <dir>]
   gguf-run rm <model> [--cache-dir <dir>]
   gguf-run package <model> [--output <dir>] [--name <name>]
-  gguf-run install llama.cpp    re-install / upgrade llama.cpp
-
-Legacy (backward-compatible):
-  gguf-run -q <query> [-m <path>] [-p <prompt>] [--cache-dir <dir>] [-- <extra>]
 
 Installation:
   go install github.com/gguf-run/gguf-run@latest
@@ -23,13 +19,9 @@ As a library:
 */
 
 import (
-	"bufio"
 	"context"
-	"crypto/sha256"
 	"flag"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,31 +45,29 @@ func main() {
 		os.Exit(1)
 	}
 
-	ensureLlamaCpp()
-
 	subcmd := os.Args[1]
 
 	switch subcmd {
 	case "run":
-		runCmd(os.Args[2:], "llama-cli", false)
+		runCmd(os.Args[2:])
 	case "server":
-		runCmd(os.Args[2:], "llama-server", true)
+		serverCmd(os.Args[2:])
 	case "list":
 		listCmd(os.Args[2:])
 	case "pull":
 		pullCmd(os.Args[2:])
 	case "rm":
 		rmCmd(os.Args[2:])
-	case "install":
-		installCmd(os.Args[2:])
 	case "package":
 		packageCmd(os.Args[2:])
 	default:
 		if !strings.HasPrefix(subcmd, "-") {
-			runCmd(os.Args[1:], "llama-cli", false)
+			runCmd(os.Args[1:])
 			return
 		}
-		legacyMain()
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", subcmd)
+		printUsage()
+		os.Exit(1)
 	}
 }
 
@@ -89,10 +79,9 @@ func printUsage() {
   gguf-run pull <model>         download a model without running it
   gguf-run rm <model>           remove a cached model
   gguf-run package <model>      create a .cgp package referencing a model
-  gguf-run install llama.cpp    re-install / upgrade llama.cpp
 
 Flags:
-  --cache-dir <dir>  model cache directory (default `+defaultCacheDir()+`)
+  --cache-dir <dir>  model cache directory (default ` + defaultCacheDir() + `)
   -p <prompt>        single-shot prompt (default: interactive)
 
 Examples:
@@ -107,15 +96,14 @@ Examples:
 `)
 }
 
-// ── run / server ─────────────────────────────────────────
+// ── run ─────────────────────────────────────────────────────
 
-func runCmd(args []string, binary string, isServer bool) {
-	flags := flag.NewFlagSet(binary, flag.ExitOnError)
+func runCmd(args []string) {
+	flags := flag.NewFlagSet("run", flag.ExitOnError)
 	prompt := flags.String("p", "", "single-shot prompt (default: interactive)")
 	cacheDir := flags.String("cache-dir", defaultCacheDir(), "model cache directory")
-	addr := flags.String("addr", ":8080", "server listen address (server only)")
 	flags.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: gguf-run %s <model> [-p <prompt>] [--cache-dir <dir>] [-- <extra>]\n\nFlags:\n", binary)
+		fmt.Fprintf(os.Stderr, "Usage: gguf-run run <model> [-p <prompt>] [--cache-dir <dir>]\n\nFlags:\n")
 		flags.PrintDefaults()
 	}
 	flags.Parse(args)
@@ -125,20 +113,9 @@ func runCmd(args []string, binary string, isServer bool) {
 		flags.Usage()
 		os.Exit(1)
 	}
-	var extraArgs []string
-	if flags.NArg() > 1 {
-		extraArgs = flags.Args()[1:]
-	}
 
 	if err := os.MkdirAll(*cacheDir, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m Error creating cache directory: %v\n", err)
-		os.Exit(1)
-	}
-
-	binPath := findBinary(binary)
-	if binPath == "" {
-		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %s not found\n", binary)
-		fmt.Fprint(os.Stderr, "Set LLAMACPP_DIR to your llama.cpp installation path.\n")
 		os.Exit(1)
 	}
 
@@ -149,36 +126,72 @@ func runCmd(args []string, binary string, isServer bool) {
 		os.Exit(1)
 	}
 
-	if isServer {
-		if err := ggufrun.RunServer(binPath, modelFile, *addr, extraArgs...); err != nil {
-			fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %v\n", err)
-			os.Exit(1)
-		}
-	} else {
-		var args []string
-		if *prompt != "" {
-			args = append(args, "-p", *prompt, "--single-turn")
-		}
-		args = append(args, extraArgs...)
-		if err := ggufrun.Run(binPath, modelFile, args...); err != nil {
-			fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %v\n", err)
-			os.Exit(1)
-		}
+	// Run using embedded llama.cpp library
+	runOpts := ggufrun.RunOptions{
+		Prompt:          *prompt,
+		MaxTokens:       2048,
+		Temperature:     0.8,
+		TopK:            40,
+		TopP:            0.95,
+		RepeatPenalty:   1.1,
+		ContextSize:     4096,
+		GPULayers:       -1,
+		UseMMap:         true,
+		UseMLock:        false,
+	}
+
+	if err := ggufrun.Run(modelFile, &runOpts); err != nil {
+		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %v\n", err)
+		os.Exit(1)
 	}
 }
 
-func findBinary(name string) string {
-	switch name {
-	case "llama-cli":
-		return ggufrun.FindLlamaCli()
-	case "llama-server":
-		return ggufrun.FindLlamaServer()
-	default:
-		return ""
+// ── server ──────────────────────────────────────────────────
+
+func serverCmd(args []string) {
+	flags := flag.NewFlagSet("server", flag.ExitOnError)
+	cacheDir := flags.String("cache-dir", defaultCacheDir(), "model cache directory")
+	addr := flags.String("addr", ":8080", "server listen address")
+	flags.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: gguf-run server <model> [--addr <host:port>] [--cache-dir <dir>]\n\nFlags:\n")
+		flags.PrintDefaults()
+	}
+	flags.Parse(args)
+
+	model := flags.Arg(0)
+	if model == "" {
+		flags.Usage()
+		os.Exit(1)
+	}
+
+	if err := os.MkdirAll(*cacheDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m Error creating cache directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	ctx := context.Background()
+	modelFile, err := resolveModel(ctx, model, *cacheDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %v\n", err)
+		os.Exit(1)
+	}
+
+	// Run server using embedded llama.cpp library
+	srvOpts := ggufrun.ServerOptions{
+		ContextSize: 4096,
+		GPULayers:   -1,
+		UseMMap:     true,
+		UseMLock:    false,
+	}
+
+	fmt.Fprintf(os.Stderr, "\n\033[32m==>\033[0m Server listening on %s\n", *addr)
+	if err := ggufrun.RunServer(modelFile, *addr, &srvOpts); err != nil {
+		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %v\n", err)
+		os.Exit(1)
 	}
 }
 
-// ── list ─────────────────────────────────────────────────
+// ── list ────────────────────────────────────────────────────
 
 func listCmd(args []string) {
 	flags := flag.NewFlagSet("list", flag.ExitOnError)
@@ -215,7 +228,7 @@ func formatSize(b int64) string {
 	}
 }
 
-// ── pull ─────────────────────────────────────────────────
+// ── pull ────────────────────────────────────────────────────
 
 func pullCmd(args []string) {
 	flags := flag.NewFlagSet("pull", flag.ExitOnError)
@@ -243,7 +256,7 @@ func pullCmd(args []string) {
 	fmt.Fprintf(os.Stderr, "\033[32m==>\033[0m Model saved to %s\n", modelFile)
 }
 
-// ── rm ───────────────────────────────────────────────────
+// ── rm ──────────────────────────────────────────────────────
 
 func rmCmd(args []string) {
 	flags := flag.NewFlagSet("rm", flag.ExitOnError)
@@ -264,7 +277,7 @@ func rmCmd(args []string) {
 	fmt.Fprintf(os.Stderr, "\033[32m==>\033[0m Removed %s\n", model)
 }
 
-// ── package ──────────────────────────────────────────────
+// ── package ─────────────────────────────────────────────────
 
 func packageCmd(args []string) {
 	outputDir := "."
@@ -339,10 +352,6 @@ func resolveURLRef(ctx context.Context, url string) (*ggufrun.GgufRef, string, e
 		Filename: filename,
 	}
 
-	if resp, err := http.Head(url); err == nil && resp.ContentLength > 0 {
-		ref.SizeBytes = resp.ContentLength
-	}
-
 	return ref, name, nil
 }
 
@@ -356,15 +365,6 @@ func resolveLocalRef(path string, size int64) (*ggufrun.GgufRef, string, error) 
 		URL:       "",
 		Filename:  filename,
 		SizeBytes: size,
-	}
-
-	f, err := os.Open(path)
-	if err == nil {
-		defer f.Close()
-		h := sha256.New()
-		if _, err := io.Copy(h, f); err == nil {
-			ref.SHA256 = fmt.Sprintf("%x", h.Sum(nil))
-		}
 	}
 
 	return ref, name, nil
@@ -390,10 +390,6 @@ func resolveSearchRef(ctx context.Context, query string) (*ggufrun.GgufRef, stri
 		Quant:    quant,
 	}
 
-	if resp, err := http.Head(res.URL); err == nil && resp.ContentLength > 0 {
-		ref.SizeBytes = resp.ContentLength
-	}
-
 	fmt.Fprintf(os.Stderr, "\033[32m==>\033[0m Selected: %s\n", filepath.Base(res.URL))
 	return ref, name, nil
 }
@@ -408,46 +404,7 @@ func extractQuant(filename string) string {
 	return ""
 }
 
-// ── first-launch dependency check ────────────────────────
-
-func ensureLlamaCpp() {
-	if ggufrun.FindLlamaCli() != "" {
-		return
-	}
-	fmt.Fprint(os.Stderr, "\033[33m==>\033[0m llama-cli not found — installing llama.cpp...\n")
-	if err := ggufrun.InstallLlamaCpp(); err != nil {
-		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %v\n", err)
-		fmt.Fprint(os.Stderr, "Set LLAMACPP_DIR to your llama.cpp installation path and try again.\n")
-		os.Exit(1)
-	}
-}
-
-// ── install (re-install / upgrade) ────────────────────────
-
-func installCmd(args []string) {
-	what := "llama.cpp"
-	if len(args) > 0 {
-		what = args[0]
-	}
-	if what != "llama.cpp" {
-		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m unknown: %s\n", what)
-		fmt.Fprint(os.Stderr, "Usage: gguf-run install llama.cpp\n")
-		os.Exit(1)
-	}
-	if ggufrun.FindLlamaCli() != "" {
-		fmt.Fprint(os.Stderr, "\033[33m==>\033[0m llama-cli already installed. Upgrade? [y/N]: ")
-		scanner := bufio.NewScanner(os.Stdin)
-		if !scanner.Scan() || strings.TrimSpace(scanner.Text()) != "y" {
-			return
-		}
-	}
-	if err := ggufrun.InstallLlamaCpp(); err != nil {
-		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %v\n", err)
-		os.Exit(1)
-	}
-}
-
-// ── model resolution ─────────────────────────────────────
+// ── model resolution ────────────────────────────────────────
 
 func resolveModel(ctx context.Context, model, cacheDir string) (string, error) {
 	if strings.HasPrefix(model, "http://") || strings.HasPrefix(model, "https://") {
@@ -490,72 +447,4 @@ func resolveCgpDir(ctx context.Context, path, cacheDir string) (string, error) {
 	}
 	fmt.Fprintf(os.Stderr, "\033[32m==>\033[0m Using gguf reference from %s\n", path)
 	return ggufrun.Download(ctx, ref.URL, cacheDir)
-}
-
-// ── legacy entry point (backward compat) ─────────────────
-
-func legacyMain() {
-	searchQuery := flag.String("q", "", "Hugging Face search query")
-	modelPath := flag.String("m", "", "model file path or download URL")
-	prompt := flag.String("p", "", "single-shot prompt (default: interactive chat)")
-	cacheDir := flag.String("cache-dir", defaultCacheDir(), "model cache directory")
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: gguf-run -q <query> [-p <prompt>] [-m <path>] [--cache-dir <dir>] [-- <llama-cli args>]\n\nFlags:\n")
-		flag.PrintDefaults()
-	}
-	flag.Parse()
-
-	if *searchQuery == "" && *modelPath == "" {
-		flag.Usage()
-		os.Exit(1)
-	}
-
-	binPath := findBinary("llama-cli")
-	if binPath == "" {
-		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m llama-cli not found\n")
-		fmt.Fprint(os.Stderr, "Set LLAMACPP_DIR to your llama.cpp installation path.\n")
-		os.Exit(1)
-	}
-
-	if err := os.MkdirAll(*cacheDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m Error creating cache directory: %v\n", err)
-		os.Exit(1)
-	}
-
-	ctx := context.Background()
-
-	var modelFile string
-	var err error
-
-	if *modelPath != "" {
-		modelFile, err = resolvePathModel(ctx, *modelPath, *cacheDir)
-	} else {
-		fmt.Fprintf(os.Stderr, "\033[32m==>\033[0m Searching: %s\n", *searchQuery)
-		modelFile, err = ggufrun.SearchAndDownload(ctx, *searchQuery, *cacheDir)
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "\033[31m==>\033[0m %v\n", err)
-		os.Exit(1)
-	}
-
-	var args []string
-	if *prompt != "" {
-		args = []string{"-p", *prompt, "--single-turn"}
-	}
-	args = append(args, flag.Args()...)
-
-	if err := ggufrun.Run(binPath, modelFile, args...); err != nil {
-		fmt.Fprintf(os.Stderr, "\n\033[31m==>\033[0m %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func resolvePathModel(ctx context.Context, modelPath, cacheDir string) (string, error) {
-	if strings.HasPrefix(modelPath, "http://") || strings.HasPrefix(modelPath, "https://") {
-		return ggufrun.Download(ctx, modelPath, cacheDir)
-	}
-	if _, err := os.Stat(modelPath); err != nil {
-		return "", fmt.Errorf("file not found: %s", modelPath)
-	}
-	return modelPath, nil
 }
