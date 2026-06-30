@@ -18,11 +18,14 @@ type CBatch struct {
 	Logits  *int8
 }
 
-var _ = unsafe.Sizeof(CBatch{})
 
 // C API function pointers — populated by RegisterFunctions.
 // Optional functions may be nil if the loaded library doesn't export them.
 var (
+	// Raw function addresses for FFI struct-by-value calls
+	LlamaModelLoadFromFileAddr uintptr
+	LlamaInitFromModelAddr     uintptr
+
 	// Model management
 	LlamaModelLoadFromFile func(path *byte, params unsafe.Pointer) uintptr
 	LlamaModelFree         func(model uintptr)
@@ -91,15 +94,17 @@ const (
 
 // tryRegister binds a function pointer to a named symbol, returning false if
 // the symbol is not found (instead of panicking like purego.RegisterLibFunc).
-func tryRegister(handle uintptr, fnPtr any, names ...string) bool {
+// Returns the raw symbol address and whether the symbol was found.
+func tryRegister(handle uintptr, fnPtr any, names ...string) (uintptr, bool) {
 	for _, name := range names {
-		if _, err := purego.Dlsym(handle, name); err != nil {
+		addr, err := purego.Dlsym(handle, name)
+		if err != nil {
 			continue
 		}
 		purego.RegisterLibFunc(fnPtr, handle, name)
-		return true
+		return addr, true
 	}
-	return false
+	return 0, false
 }
 
 // RegisterFunctions binds all C API functions from the loaded library.
@@ -112,7 +117,7 @@ func RegisterFunctions() error {
 	}
 
 	// Model management
-	tryRegister(handle, &LlamaModelLoadFromFile, "llama_model_load_from_file", "llama_load_model_from_file")
+	LlamaModelLoadFromFileAddr, _ = tryRegister(handle, &LlamaModelLoadFromFile, "llama_model_load_from_file", "llama_load_model_from_file")
 	tryRegister(handle, &LlamaModelFree, "llama_model_free", "llama_free_model")
 	tryRegister(handle, &LlamaModelDesc, "llama_model_desc")
 	tryRegister(handle, &LlamaModelSize, "llama_model_size")
@@ -121,7 +126,7 @@ func RegisterFunctions() error {
 	tryRegister(handle, &LlamaModelNLayer, "llama_model_n_layer", "llama_n_layer")
 
 	// Context management
-	tryRegister(handle, &LlamaInitFromModel, "llama_init_from_model", "llama_new_context_with_model")
+	LlamaInitFromModelAddr, _ = tryRegister(handle, &LlamaInitFromModel, "llama_init_from_model", "llama_new_context_with_model")
 	tryRegister(handle, &LlamaFree, "llama_free")
 	tryRegister(handle, &LlamaNCtx, "llama_n_ctx")
 	tryRegister(handle, &LlamaNBatch, "llama_n_batch")

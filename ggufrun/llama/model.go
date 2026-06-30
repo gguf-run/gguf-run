@@ -15,15 +15,20 @@ func LoadModel(path string) (*Model, error) {
 	if !IsLoaded() {
 		return nil, ErrLibraryNotLoaded
 	}
-	if LlamaModelLoadFromFile == nil {
+	if LlamaModelLoadFromFileAddr == 0 {
 		return nil, fmt.Errorf("llama_model_load_from_file not available in this library version")
 	}
 
 	pathBytes := append([]byte(path), 0)
 
-	handle := LlamaModelLoadFromFile(&pathBytes[0], nil)
-	if handle == 0 {
-		return nil, fmt.Errorf("failed to load model from %s", path)
+	params := CModelParams{
+		NGpuLayers: -1, // all layers
+		MainGpu:   -1, // no preference
+	}
+
+	handle, err := LoadModelFFI(&pathBytes[0], &params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load model from %s: %w", path, err)
 	}
 
 	return &Model{handle: handle}, nil
@@ -39,13 +44,17 @@ func (m *Model) Free() {
 
 // NewContext creates a new inference context for this model.
 func (m *Model) NewContext(ctxSize int32) (*Context, error) {
-	if LlamaInitFromModel == nil {
+	if LlamaInitFromModelAddr == 0 {
 		return nil, fmt.Errorf("llama_init_from_model not available in this library version")
 	}
 
-	handle := LlamaInitFromModel(m.handle, nil)
-	if handle == 0 {
-		return nil, fmt.Errorf("failed to create context")
+	params := CContextParams{
+		NCtx: uint32(ctxSize),
+	}
+
+	handle, err := InitFromModelFFI(m.handle, &params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create context: %w", err)
 	}
 
 	return &Context{handle: handle, model: m}, nil
