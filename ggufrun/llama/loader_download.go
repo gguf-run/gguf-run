@@ -10,6 +10,35 @@ import (
 	"runtime"
 )
 
+// isMusl returns true if the system uses musl libc instead of glibc.
+// On such systems, glibc-linked pre-built binaries won't load.
+func isMusl() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	muslPaths := []string{
+		"/lib/ld-musl-x86_64.so.1",
+		"/lib/ld-musl-aarch64.so.1",
+		"/lib/ld-musl-armhf.so.1",
+	}
+	for _, p := range muslPaths {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// autoDownloadSupported returns true if pre-built libraries can be downloaded
+// and loaded on this system. Pre-built libs link against glibc and won't work
+// on musl-based distros (Alpine, etc.).
+func autoDownloadSupported() (bool, string) {
+	if isMusl() {
+		return false, "pre-built libraries link against glibc and are incompatible with musl libc"
+	}
+	return true, ""
+}
+
 // llama.cpp release build to use for auto-download.
 const llamaCppBuild = "b6099"
 

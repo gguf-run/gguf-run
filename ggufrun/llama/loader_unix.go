@@ -91,29 +91,43 @@ func LoadEmbedded() error {
 	}
 
 	// Auto-download from GitHub releases
+	var dlErr error
 	cacheDirPath, err = cacheDir()
-	if err == nil {
-		destPath, deps, err := autoDownloadLib(cacheDirPath)
-		if err == nil {
+	canDownload, reason := autoDownloadSupported()
+	if canDownload && err == nil {
+		destPath, deps, aerr := autoDownloadLib(cacheDirPath)
+		if aerr == nil {
 			// Load dependencies first so symbols are available
 			for _, dep := range deps {
-				_, err := purego.Dlopen(dep, purego.RTLD_NOW|purego.RTLD_GLOBAL)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "\033[33m==>\033[0m Warning: failed to load dependency %s: %v\n", dep, err)
+				_, depErr := purego.Dlopen(dep, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+				if depErr != nil {
+					fmt.Fprintf(os.Stderr, "\033[33m==>\033[0m Warning: failed to load dependency %s: %v\n", dep, depErr)
 				}
 			}
-			handle, err := purego.Dlopen(destPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
-			if err == nil {
+			handle, loadErr := purego.Dlopen(destPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+			if loadErr == nil {
 				libHandle = handle
 				libPath = destPath
 				isLoaded = true
 				return nil
 			}
+			dlErr = loadErr
+		} else {
+			dlErr = aerr
 		}
 	}
 
-	return fmt.Errorf("llama.cpp library (%s) not found: install llama.cpp or run 'make populate-libs' to embed it",
-		libName)
+	msg := fmt.Sprintf("llama.cpp library (%s) not found", libName)
+	switch {
+	case !canDownload:
+		msg += "\n  " + reason + ". Install via apk: apk add llama.cpp-libs"
+	case dlErr != nil:
+		msg += fmt.Sprintf("\n  auto-download succeeded but library failed to load: %v", dlErr)
+	default:
+		msg += "\n  No embedded library found for this platform"
+	}
+	msg += "\n  Alternatively, run 'make populate-libs' from the source tree to embed the library, or install llama.cpp system-wide"
+	return fmt.Errorf("%s", msg)
 }
 
 // Handle returns the loaded library handle.
