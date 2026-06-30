@@ -25,6 +25,7 @@ var (
 	// Raw function addresses for FFI struct-by-value calls
 	LlamaModelLoadFromFileAddr uintptr
 	LlamaInitFromModelAddr     uintptr
+	LlamaDecodeAddr            uintptr
 
 	// Model management
 	LlamaModelLoadFromFile func(path *byte, params unsafe.Pointer) uintptr
@@ -148,7 +149,7 @@ func RegisterFunctions() error {
 	tryRegister(handle, &LlamaTokenMask, "llama_vocab_mask", "llama_token_mask")
 
 	// Inference
-	tryRegister(handle, &LlamaDecode, "llama_decode")
+	LlamaDecodeAddr, _ = tryRegister(handle, &LlamaDecode, "llama_decode")
 	tryRegister(handle, &LlamaEncode, "llama_encode")
 	tryRegister(handle, &LlamaBatchGetOne, "llama_batch_get_one")
 	tryRegister(handle, &LlamaBatchFree, "llama_batch_free")
