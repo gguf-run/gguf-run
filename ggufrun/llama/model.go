@@ -49,7 +49,9 @@ func (m *Model) NewContext(ctxSize int32) (*Context, error) {
 	}
 
 	params := CContextParams{
-		NCtx: uint32(ctxSize),
+		NCtx:   uint32(ctxSize),
+		NBatch: 512,
+		NUBatch: 512,
 	}
 
 	handle, err := InitFromModelFFI(m.handle, &params)
