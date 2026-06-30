@@ -2,11 +2,30 @@ package llama
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"unsafe"
 
-	"github.com/jupiterrider/ffi"
+	"github.com/ebitengine/purego"
 )
+
+// ffiType mirrors the C ffi_type struct from libffi.
+type ffiType struct {
+	Size      uint64
+	Alignment uint16
+	Typ       uint16
+	Elements  unsafe.Pointer // **ffi_type, nil-terminated array for struct types
+}
+
+// ffiCif mirrors the first 6 fields of the C ffi_cif struct.
+type ffiCif struct {
+	Abi      uint32
+	NArgs    uint32
+	ArgTypes unsafe.Pointer // **ffi_type
+	RType    unsafe.Pointer // *ffi_type
+	Bytes    uint32
+	Flags    uint32
+}
 
 // CModelParams matches the C struct llama_model_params from b9564.
 type CModelParams struct {
@@ -69,58 +88,152 @@ type CContextParams struct {
 	CtxOther       uintptr
 }
 
-var (
-	modelParamsType   ffi.Type
-	contextParamsType ffi.Type
-	cifModelLoad      ffi.Cif
-	cifContextCreate  ffi.Cif
-	onceModelLoad     sync.Once
-	onceContextCreate sync.Once
+const (
+	ffiTypeVoid = iota
+	ffiTypeInt
+	ffiTypeFloat
+	ffiTypeDouble
+	ffiTypeLongdouble
+	ffiTypeUint8
+	ffiTypeSint8
+	ffiTypeUint16
+	ffiTypeSint16
+	ffiTypeUint32
+	ffiTypeSint32
+	ffiTypeUint64
+	ffiTypeSint64
+	ffiTypeStruct
+	ffiTypePointer
+	ffiTypeComplex
 )
 
-func initModelLoadCIF() {
-	onceModelLoad.Do(func() {
-		modelParamsType = ffi.NewType(
-			&ffi.TypePointer,
-			&ffi.TypePointer,
-			&ffi.TypeSint32,
-			&ffi.TypeSint32,
-			&ffi.TypeSint32,
-			&ffi.TypePointer,
-			&ffi.TypePointer,
-			&ffi.TypePointer,
-			&ffi.TypePointer,
-			&ffi.TypeUint8,
-			&ffi.TypeUint8,
-			&ffi.TypeUint8,
-			&ffi.TypeUint8,
-			&ffi.TypeUint8,
-			&ffi.TypeUint8,
-			&ffi.TypeUint8,
-			&ffi.TypeUint8,
-		)
-		ffi.PrepCif(&cifModelLoad, ffi.DefaultAbi, 2, &ffi.TypePointer, &ffi.TypePointer, &modelParamsType)
+// Predefined ffi_type pointers loaded from libffi.
+var (
+	ffiTypeVoidPtr    *ffiType
+	ffiTypeU8Ptr      *ffiType
+	ffiTypeS32Ptr     *ffiType
+	ffiTypeU32Ptr     *ffiType
+	ffiTypeFloatPtr   *ffiType
+	ffiTypePointerPtr *ffiType
+)
+
+// Composite ffi_type values for llama C structs.
+var (
+	cModelParamsType   ffiType
+	cContextParamsType ffiType
+	initTypesOnce      sync.Once
+)
+
+// Stable backing arrays for composite type element lists (keep GC from
+// collecting them since ffi_type.Elements points into slice backing store).
+var (
+	modelParamElems   []*ffiType
+	contextParamElems []*ffiType
+)
+
+func initTypes() {
+	initTypesOnce.Do(func() {
+		modelParamElems = []*ffiType{
+			ffiTypePointerPtr, ffiTypePointerPtr,
+			ffiTypeS32Ptr, ffiTypeS32Ptr, ffiTypeS32Ptr,
+			ffiTypePointerPtr, ffiTypePointerPtr, ffiTypePointerPtr, ffiTypePointerPtr,
+			ffiTypeU8Ptr, ffiTypeU8Ptr, ffiTypeU8Ptr, ffiTypeU8Ptr,
+			ffiTypeU8Ptr, ffiTypeU8Ptr, ffiTypeU8Ptr, ffiTypeU8Ptr,
+			nil,
+		}
+		cModelParamsType = ffiType{
+			Typ:      ffiTypeStruct,
+			Elements: unsafe.Pointer(&modelParamElems[0]),
+		}
+
+		contextParamElems = []*ffiType{
+			ffiTypeU32Ptr, ffiTypeU32Ptr, ffiTypeU32Ptr, ffiTypeU32Ptr,
+			ffiTypeU32Ptr, ffiTypeU32Ptr,
+			ffiTypeS32Ptr, ffiTypeS32Ptr,
+			ffiTypeS32Ptr, ffiTypeS32Ptr, ffiTypeS32Ptr, ffiTypeS32Ptr, ffiTypeS32Ptr,
+			ffiTypeFloatPtr, ffiTypeFloatPtr, ffiTypeFloatPtr, ffiTypeFloatPtr,
+			ffiTypeFloatPtr, ffiTypeFloatPtr,
+			ffiTypeU32Ptr, ffiTypeFloatPtr,
+			ffiTypePointerPtr, ffiTypePointerPtr,
+			ffiTypeS32Ptr, ffiTypeS32Ptr,
+			ffiTypePointerPtr, ffiTypePointerPtr,
+			ffiTypeU8Ptr, ffiTypeU8Ptr, ffiTypeU8Ptr, ffiTypeU8Ptr,
+			ffiTypeU8Ptr, ffiTypeU8Ptr,
+			ffiTypePointerPtr, ffiTypePointerPtr, ffiTypePointerPtr,
+			nil,
+		}
+		cContextParamsType = ffiType{
+			Typ:      ffiTypeStruct,
+			Elements: unsafe.Pointer(&contextParamElems[0]),
+		}
 	})
 }
 
-func initContextCreateCIF() {
-	onceContextCreate.Do(func() {
-		contextParamsType = ffi.NewType(
-			&ffi.TypeUint32, &ffi.TypeUint32, &ffi.TypeUint32, &ffi.TypeUint32,
-			&ffi.TypeUint32, &ffi.TypeUint32, &ffi.TypeSint32, &ffi.TypeSint32,
-			&ffi.TypeSint32, &ffi.TypeSint32, &ffi.TypeSint32, &ffi.TypeSint32,
-			&ffi.TypeSint32,
-			&ffi.TypeFloat, &ffi.TypeFloat, &ffi.TypeFloat, &ffi.TypeFloat,
-			&ffi.TypeFloat, &ffi.TypeFloat, &ffi.TypeUint32, &ffi.TypeFloat,
-			&ffi.TypePointer, &ffi.TypePointer,
-			&ffi.TypeSint32, &ffi.TypeSint32,
-			&ffi.TypePointer, &ffi.TypePointer,
-			&ffi.TypeUint8, &ffi.TypeUint8, &ffi.TypeUint8, &ffi.TypeUint8,
-			&ffi.TypeUint8, &ffi.TypeUint8,
-			&ffi.TypePointer, &ffi.TypePointer, &ffi.TypePointer,
-		)
-		ffi.PrepCif(&cifContextCreate, ffi.DefaultAbi, 2, &ffi.TypePointer, &ffi.TypePointer, &contextParamsType)
+// Libffi function addresses loaded at runtime.
+var (
+	prepCifFn uintptr
+	callFn    uintptr
+)
+
+// ffiABI returns the FFI_DEFAULT_ABI value for the current platform.
+func ffiABI() uint32 {
+	switch runtime.GOARCH {
+	case "arm64":
+		return 1
+	default:
+		return 2
+	}
+}
+
+// loadLibffi errors
+var (
+	libffiLoadOnce sync.Once
+	libffiLoadErr  error
+)
+
+func loadLibffi() error {
+	libffiLoadOnce.Do(func() {
+		handle, err := purego.Dlopen("libffi.so.8", purego.RTLD_LAZY|purego.RTLD_GLOBAL)
+		if err != nil {
+			libffiLoadErr = fmt.Errorf("libffi.so.8 not found: %w\nInstall with: apt install libffi8  (Debian/Ubuntu)\n          or: apk add libffi       (Alpine)\n          or: pacman -S libffi     (Arch)", err)
+			return
+		}
+
+		prepCifFn, err = purego.Dlsym(handle, "ffi_prep_cif")
+		if err != nil {
+			libffiLoadErr = fmt.Errorf("ffi_prep_cif symbol not found: %w", err)
+			return
+		}
+
+		callFn, err = purego.Dlsym(handle, "ffi_call")
+		if err != nil {
+			libffiLoadErr = fmt.Errorf("ffi_call symbol not found: %w", err)
+			return
+		}
+
+		typePtrs := []struct {
+			name string
+			dst  **ffiType
+		}{
+			{"ffi_type_void", &ffiTypeVoidPtr},
+			{"ffi_type_uint8", &ffiTypeU8Ptr},
+			{"ffi_type_sint32", &ffiTypeS32Ptr},
+			{"ffi_type_uint32", &ffiTypeU32Ptr},
+			{"ffi_type_float", &ffiTypeFloatPtr},
+			{"ffi_type_pointer", &ffiTypePointerPtr},
+		}
+		for _, tp := range typePtrs {
+			addr, err := purego.Dlsym(handle, tp.name)
+			if err != nil {
+				libffiLoadErr = fmt.Errorf("%s symbol not found: %w", tp.name, err)
+				return
+			}
+			*tp.dst = *(**ffiType)(unsafe.Pointer(&addr))
+		}
+
+		initTypes()
 	})
+	return libffiLoadErr
 }
 
 // LoadModelFFI calls llama_model_load_from_file with correct struct-by-value ABI.
@@ -128,20 +241,39 @@ func LoadModelFFI(path *byte, params *CModelParams) (uintptr, error) {
 	if LlamaModelLoadFromFileAddr == 0 {
 		return 0, fmt.Errorf("llama_model_load_from_file not available")
 	}
-	initModelLoadCIF()
+	if err := loadLibffi(); err != nil {
+		return 0, fmt.Errorf("libffi: %w", err)
+	}
 
-	var ret uintptr
-	pathPtr := unsafe.Pointer(path)
-	paramsPtr := unsafe.Pointer(params)
-	retPtr := unsafe.Pointer(&ret)
-	ffi.Call(&cifModelLoad, LlamaModelLoadFromFileAddr, retPtr,
-		unsafe.Pointer(&pathPtr),
-		paramsPtr,
+	var cif ffiCif
+	atypes := [2]*ffiType{ffiTypePointerPtr, &cModelParamsType}
+	ret, _, _ := purego.SyscallN(prepCifFn,
+		uintptr(unsafe.Pointer(&cif)),
+		uintptr(ffiABI()),
+		2,
+		uintptr(unsafe.Pointer(ffiTypePointerPtr)),
+		uintptr(unsafe.Pointer(&atypes[0])),
 	)
-	if ret == 0 {
+	if ret != 0 {
+		return 0, fmt.Errorf("ffi_prep_cif failed with status %d", ret)
+	}
+
+	var result uintptr
+	pathPtr := unsafe.Pointer(path)
+	values := [2]unsafe.Pointer{
+		unsafe.Pointer(&pathPtr),
+		unsafe.Pointer(params),
+	}
+	purego.SyscallN(callFn,
+		uintptr(unsafe.Pointer(&cif)),
+		LlamaModelLoadFromFileAddr,
+		uintptr(unsafe.Pointer(&result)),
+		uintptr(unsafe.Pointer(&values[0])),
+	)
+	if result == 0 {
 		return 0, fmt.Errorf("llama_model_load_from_file returned NULL")
 	}
-	return ret, nil
+	return result, nil
 }
 
 // InitFromModelFFI calls llama_init_from_model with correct struct-by-value ABI.
@@ -149,16 +281,37 @@ func InitFromModelFFI(model uintptr, params *CContextParams) (uintptr, error) {
 	if LlamaInitFromModelAddr == 0 {
 		return 0, fmt.Errorf("llama_init_from_model not available")
 	}
-	initContextCreateCIF()
+	if err := loadLibffi(); err != nil {
+		return 0, fmt.Errorf("libffi: %w", err)
+	}
 
-	var ret uintptr
-	paramsArg := unsafe.Pointer(params)
-	ffi.Call(&cifContextCreate, LlamaInitFromModelAddr, unsafe.Pointer(&ret),
-		unsafe.Pointer(&model),
-		paramsArg,
+	var cif ffiCif
+	atypes := [2]*ffiType{ffiTypePointerPtr, &cContextParamsType}
+	ret, _, _ := purego.SyscallN(prepCifFn,
+		uintptr(unsafe.Pointer(&cif)),
+		uintptr(ffiABI()),
+		2,
+		uintptr(unsafe.Pointer(ffiTypePointerPtr)),
+		uintptr(unsafe.Pointer(&atypes[0])),
 	)
-	if ret == 0 {
+	if ret != 0 {
+		return 0, fmt.Errorf("ffi_prep_cif failed with status %d", ret)
+	}
+
+	var result uintptr
+	modelPtr := model
+	values := [2]unsafe.Pointer{
+		unsafe.Pointer(&modelPtr),
+		unsafe.Pointer(params),
+	}
+	purego.SyscallN(callFn,
+		uintptr(unsafe.Pointer(&cif)),
+		LlamaInitFromModelAddr,
+		uintptr(unsafe.Pointer(&result)),
+		uintptr(unsafe.Pointer(&values[0])),
+	)
+	if result == 0 {
 		return 0, fmt.Errorf("llama_init_from_model returned NULL")
 	}
-	return ret, nil
+	return result, nil
 }
