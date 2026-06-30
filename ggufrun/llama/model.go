@@ -3,6 +3,7 @@ package llama
 import (
 	"fmt"
 	"strings"
+	"unsafe"
 )
 
 // Model represents a loaded GGUF model.
@@ -196,9 +197,84 @@ func (c *Context) Model() *Model {
 	return c.model
 }
 
-// Generate runs generation - NOT YET IMPLEMENTED (needs ffi for struct passing).
+// Generate runs text generation: tokenize prompt → prefill → autoregressive loop.
 func (c *Context) Generate(opts GenerateOptions) (string, error) {
-	return "", fmt.Errorf("inference via purego not yet implemented - needs ffi struct support")
+	if c.handle == 0 {
+		return "", fmt.Errorf("context has been freed")
+	}
+
+	// Model metadata
+	model := c.Model()
+	nVocab := int(model.Info().NVocab)
+	if nVocab <= 0 {
+		nVocab = 32000
+	}
+	eosToken := model.TokenEOS()
+
+	// 1. Tokenize prompt
+	promptTokens, err := c.tokenize(opts.Prompt)
+	if err != nil {
+		return "", fmt.Errorf("tokenize: %w", err)
+	}
+	if len(promptTokens) == 0 {
+		return "", fmt.Errorf("empty prompt")
+	}
+
+	// 2. Prefill: decode all prompt tokens at once
+	{
+		batch := buildBatch(promptTokens, true)
+		if _, err := DecodeFFI(c.handle, &batch); err != nil {
+			return "", fmt.Errorf("prefill: %w", err)
+		}
+	}
+
+	// 3. Generation loop
+	var output strings.Builder
+	var lastTokens []int32
+	pos := int32(len(promptTokens))
+	maxTokens := opts.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 2048
+	}
+
+	for i := int32(0); i < maxTokens; i++ {
+		logitsPtr := c.getLogitsIth(0)
+		if logitsPtr == nil {
+			return output.String(), fmt.Errorf("nil logits at step %d", i)
+		}
+		logits := unsafe.Slice(logitsPtr, nVocab)
+
+		nextToken := sampleToken(logits, opts.Temperature, opts.TopK,
+			lastTokens, opts.RepeatPenalty)
+
+		if nextToken == eosToken && !opts.IgnoreEOS {
+			break
+		}
+
+		piece := model.TokenToPiece(nextToken, false, false)
+		output.WriteString(piece)
+		if opts.Callback != nil {
+			opts.Callback(piece)
+		}
+
+		full := output.String()
+		if checkStopSequences(full, opts.StopSequences) {
+			break
+		}
+
+		lastTokens = append(lastTokens, nextToken)
+		if len(lastTokens) > 64 {
+			lastTokens = lastTokens[1:]
+		}
+
+		batch := buildSingleTokenBatch(nextToken, pos)
+		pos++
+		if _, err := DecodeFFI(c.handle, &batch); err != nil {
+			return output.String(), fmt.Errorf("decode at step %d: %w", i, err)
+		}
+	}
+
+	return output.String(), nil
 }
 
 // tokenize delegates to the model's tokenizer.
@@ -206,7 +282,118 @@ func (c *Context) tokenize(text string) ([]int32, error) {
 	return c.model.Tokenize(text, true, false)
 }
 
-// tokenToPiece delegates to the model's detokenizer.
-func (c *Context) tokenToPiece(token int32) string {
-	return c.model.TokenToPiece(token, false, false)
+// getLogitsIth returns logits for the i-th output token, falling back to
+// getLogits if llama_get_logits_ith is not available.
+func (c *Context) getLogitsIth(i int32) *float32 {
+	if LlamaGetLogitsIth != nil {
+		return LlamaGetLogitsIth(c.handle, i)
+	}
+	if LlamaGetLogits != nil {
+		return LlamaGetLogits(c.handle)
+	}
+	return nil
+}
+
+// sampleToken picks the next token from logits (argmax with temperature).
+func sampleToken(logits []float32, temp float32, topK int32, lastTokens []int32, repeatPenalty float32) int32 {
+	n := len(logits)
+
+	// Apply temperature
+	if temp > 0 && temp != 1.0 {
+		for i := 0; i < n; i++ {
+			logits[i] /= temp
+		}
+	}
+
+	// Apply repetition penalty
+	if repeatPenalty != 1.0 && len(lastTokens) > 0 {
+		for _, tok := range lastTokens {
+			if tok >= 0 && int(tok) < n {
+				if logits[tok] < 0 {
+					logits[tok] *= repeatPenalty
+				} else {
+					logits[tok] /= repeatPenalty
+				}
+			}
+		}
+	}
+
+	// Argmax
+	best := int32(0)
+	bestVal := logits[0]
+	for i := 1; i < n; i++ {
+		if logits[i] > bestVal {
+			bestVal = logits[i]
+			best = int32(i)
+		}
+	}
+	return best
+}
+
+// buildBatch returns a CBatch for the given tokens.
+// If logitsLast is true, only the final token requests logit output.
+func buildBatch(tokens []int32, logitsLast bool) CBatch {
+	var nSeqID int32 = 1
+	seqIDs := make([]*int32, len(tokens))
+	for i := range seqIDs {
+		var sid int32 = 0
+		seqIDs[i] = &sid
+	}
+	var logitsArr []int8
+	if logitsLast {
+		logitsArr = make([]int8, len(tokens))
+		logitsArr[len(tokens)-1] = 1
+	}
+	return CBatch{
+		NTokens: int32(len(tokens)),
+		Token:   &tokens[0],
+		Embd:    nil,
+		Pos:     nil,
+		NSeqId:  &nSeqID,
+		SeqId:   &seqIDs[0],
+		Logits:  ptrOrNil(logitsArr),
+	}
+}
+
+// buildSingleTokenBatch returns a CBatch for a single token at the given position.
+func buildSingleTokenBatch(token, pos int32) CBatch {
+	var nSeqID int32 = 1
+	var seqID int32 = 0
+	seqIDs := []*int32{&seqID}
+	var wantLogits int8 = 1
+	return CBatch{
+		NTokens: 1,
+		Token:   &token,
+		Embd:    nil,
+		Pos:     &pos,
+		NSeqId:  &nSeqID,
+		SeqId:   &seqIDs[0],
+		Logits:  &wantLogits,
+	}
+}
+
+// ptrOrNil returns a pointer to the first element of s, or nil if s is empty.
+func ptrOrNil[T any](s []T) *T {
+	if len(s) == 0 {
+		return nil
+	}
+	return &s[0]
+}
+
+// checkStopSequences returns true if s contains any of the stop strings.
+func checkStopSequences(s string, stops []string) bool {
+	for _, stop := range stops {
+		if stop != "" && strings.Contains(s, stop) {
+			return true
+		}
+	}
+	return false
+}
+
+// NCtx returns the context size.
+func (c *Context) NCtx() uint32 {
+	if LlamaNCtx != nil {
+		return LlamaNCtx(c.handle)
+	}
+	return 0
 }

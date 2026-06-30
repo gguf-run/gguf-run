@@ -121,6 +121,7 @@ var (
 var (
 	cModelParamsType   ffiType
 	cContextParamsType ffiType
+	cBatchType         ffiType
 	initTypesOnce      sync.Once
 )
 
@@ -129,6 +130,7 @@ var (
 var (
 	modelParamElems   []*ffiType
 	contextParamElems []*ffiType
+	batchElems        []*ffiType
 )
 
 func initTypes() {
@@ -165,6 +167,21 @@ func initTypes() {
 		cContextParamsType = ffiType{
 			Typ:      ffiTypeStruct,
 			Elements: unsafe.Pointer(&contextParamElems[0]),
+		}
+
+		batchElems = []*ffiType{
+			ffiTypeS32Ptr,
+			ffiTypePointerPtr,
+			ffiTypePointerPtr,
+			ffiTypePointerPtr,
+			ffiTypePointerPtr,
+			ffiTypePointerPtr,
+			ffiTypePointerPtr,
+			nil,
+		}
+		cBatchType = ffiType{
+			Typ:      ffiTypeStruct,
+			Elements: unsafe.Pointer(&batchElems[0]),
 		}
 	})
 }
@@ -314,4 +331,44 @@ func InitFromModelFFI(model uintptr, params *CContextParams) (uintptr, error) {
 		return 0, fmt.Errorf("llama_init_from_model returned NULL")
 	}
 	return result, nil
+}
+
+// DecodeFFI calls llama_decode with batch passed by value via FFI.
+func DecodeFFI(ctx uintptr, batch *CBatch) (int32, error) {
+	if LlamaDecodeAddr == 0 {
+		return -1, fmt.Errorf("llama_decode not available")
+	}
+	if err := loadLibffi(); err != nil {
+		return -1, fmt.Errorf("libffi: %w", err)
+	}
+
+	var cif ffiCif
+	atypes := [2]*ffiType{ffiTypePointerPtr, &cBatchType}
+	ret, _, _ := purego.SyscallN(prepCifFn,
+		uintptr(unsafe.Pointer(&cif)),
+		uintptr(ffiABI()),
+		2,
+		uintptr(unsafe.Pointer(ffiTypeS32Ptr)),
+		uintptr(unsafe.Pointer(&atypes[0])),
+	)
+	if ret != 0 {
+		return -1, fmt.Errorf("ffi_prep_cif failed with status %d", ret)
+	}
+
+	var result int32
+	ctxPtr := ctx
+	values := [2]unsafe.Pointer{
+		unsafe.Pointer(&ctxPtr),
+		unsafe.Pointer(batch),
+	}
+	purego.SyscallN(callFn,
+		uintptr(unsafe.Pointer(&cif)),
+		LlamaDecodeAddr,
+		uintptr(unsafe.Pointer(&result)),
+		uintptr(unsafe.Pointer(&values[0])),
+	)
+	if result != 0 {
+		return result, fmt.Errorf("llama_decode failed with code %d", result)
+	}
+	return 0, nil
 }
