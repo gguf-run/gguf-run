@@ -1,12 +1,13 @@
 package llama
 
 import (
+	"fmt"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
 )
 
-// C-compatible struct for llama_batch (matching b6099 layout)
+// C-compatible struct for llama_batch (matching b6099 layout).
 type CBatch struct {
 	NTokens int32
 	Token   *int32
@@ -17,147 +18,156 @@ type CBatch struct {
 	Logits  *int8
 }
 
-// Size checking at compile time
 var _ = unsafe.Sizeof(CBatch{})
 
-// C API function pointers - populated by RegisterFunctions
+// C API function pointers — populated by RegisterFunctions.
+// Optional functions may be nil if the loaded library doesn't export them.
 var (
-	// Model management (struct params - uses ffi)
+	// Model management
 	LlamaModelLoadFromFile func(path *byte, params unsafe.Pointer) uintptr
+	LlamaModelFree         func(model uintptr)
+	LlamaModelDesc         func(model uintptr, buf *byte, bufSize uint64) int32
+	LlamaModelSize         func(model uintptr) uint64
+	LlamaModelNVocab       func(model uintptr) int32
+	LlamaModelNEmbd        func(model uintptr) int32
+	LlamaModelNLayer       func(model uintptr) int32
 
-	// Model management (simple params - uses purego)
-	LlamaModelFree  func(model uintptr)
-	LlamaModelDesc  func(model uintptr, buf *byte, bufSize uint64) int32
-	LlamaModelSize  func(model uintptr) uint64
-	LlamaModelNVocab func(model uintptr) int32
-	LlamaModelNEmbd func(model uintptr) int32
-	LlamaModelNLayer func(model uintptr) int32
-
-	// Context management (struct params - uses ffi)
+	// Context management
 	LlamaInitFromModel func(model uintptr, params unsafe.Pointer) uintptr
-
-	// Context management (simple params - uses purego)
 	LlamaFree          func(ctx uintptr)
 	LlamaNCtx          func(ctx uintptr) uint32
 	LlamaNBatch        func(ctx uintptr) uint32
 	LlamaNSeqMax       func(ctx uintptr) uint32
 	LlamaGetModel      func(ctx uintptr) uintptr
 
-	// Tokenization (uses llama_vocab in b6099, but deprecated wrappers take model)
-	LlamaTokenize       func(model uintptr, text *byte, textLen int32, tokens *int32, nTokens int32, addBos bool, special bool) int32
-	LlamaTokenToPiece   func(model uintptr, token int32, buf *byte, length int32, lstrip int32, special bool) int32
-	LlamaDetokenize     func(ctx uintptr, tokens *int32, nTokens int32, text *byte, textLenMax int32, removeSpecials bool, unparseSpecials bool) int32
+	// Tokenization
+	LlamaTokenize     func(model uintptr, text *byte, textLen int32, tokens *int32, nTokens int32, addBos bool, special bool) int32
+	LlamaTokenToPiece func(model uintptr, token int32, buf *byte, length int32, lstrip int32, special bool) int32
+	LlamaDetokenize   func(ctx uintptr, tokens *int32, nTokens int32, text *byte, textLenMax int32, removeSpecials bool, unparseSpecials bool) int32
 
-	// Special tokens (deprecated wrappers on model) - use purego
-	LlamaTokenBos func(model uintptr) int32
-	LlamaTokenEos func(model uintptr) int32
-	LlamaTokenNl  func(model uintptr) int32
-	LlamaTokenEot func(model uintptr) int32
-	LlamaTokenSep func(model uintptr) int32
-	LlamaTokenPad func(model uintptr) int32
+	// Special tokens
+	LlamaTokenBos  func(model uintptr) int32
+	LlamaTokenEos  func(model uintptr) int32
+	LlamaTokenNl   func(model uintptr) int32
+	LlamaTokenEot  func(model uintptr) int32
+	LlamaTokenSep  func(model uintptr) int32
+	LlamaTokenPad  func(model uintptr) int32
 	LlamaTokenMask func(model uintptr) int32
 
-	// Inference (struct params - uses ffi)
-	LlamaDecode    func(ctx uintptr, batch unsafe.Pointer) int32
-	LlamaEncode    func(ctx uintptr, batch unsafe.Pointer) int32
+	// Inference (struct params)
+	LlamaDecode      func(ctx uintptr, batch unsafe.Pointer) int32
+	LlamaEncode      func(ctx uintptr, batch unsafe.Pointer) int32
 	LlamaBatchGetOne func(tokens *int32, nTokens int32) unsafe.Pointer
-	LlamaBatchFree func(batch unsafe.Pointer)
+	LlamaBatchFree   func(batch unsafe.Pointer)
 
-	// Sampling (simple params - uses purego)
-	LlamaSampleTemperature            func(ctx uintptr, token int32, temp float32) int32
-	LlamaSampleTopK                   func(ctx uintptr, token int32, k int32) int32
-	LlamaSampleTopP                   func(ctx uintptr, token int32, p float32, minKeep int32) int32
-	LlamaSampleMinP                   func(ctx uintptr, token int32, p float32) int32
-	LlamaSampleTypical                func(ctx uintptr, token int32, p float32, minKeep int32) int32
-	LlamaSampleRepetitionPenalty      func(ctx uintptr, token int32, penalty float32, lastTokens *int32, lastTokensSize int32) int32
-	LlamaSampleFrequencyPenalty       func(ctx uintptr, token int32, penalty float32, lastTokens *int32, lastTokensSize int32) int32
-	LlamaSamplePresencePenalty        func(ctx uintptr, token int32, penalty float32, lastTokens *int32, lastTokensSize int32) int32
+	// Sampling
+	LlamaSampleTemperature       func(ctx uintptr, token int32, temp float32) int32
+	LlamaSampleTopK              func(ctx uintptr, token int32, k int32) int32
+	LlamaSampleTopP              func(ctx uintptr, token int32, p float32, minKeep int32) int32
+	LlamaSampleMinP              func(ctx uintptr, token int32, p float32) int32
+	LlamaSampleTypical           func(ctx uintptr, token int32, p float32, minKeep int32) int32
+	LlamaSampleRepetitionPenalty func(ctx uintptr, token int32, penalty float32, lastTokens *int32, lastTokensSize int32) int32
+	LlamaSampleFrequencyPenalty  func(ctx uintptr, token int32, penalty float32, lastTokens *int32, lastTokensSize int32) int32
+	LlamaSamplePresencePenalty   func(ctx uintptr, token int32, penalty float32, lastTokens *int32, lastTokensSize int32) int32
 
 	// Logits
 	LlamaGetLogits    func(ctx uintptr) *float32
 	LlamaGetLogitsIth func(ctx uintptr, i int32) *float32
 
 	// Backend
-	LlamaBackendInit func()
-	LlamaBackendFree func()
-	LlamaSupportsMMap func() bool
-	LlamaSupportsMLock func() bool
+	LlamaBackendInit       func()
+	LlamaBackendFree       func()
+	LlamaSupportsMMap      func() bool
+	LlamaSupportsMLock     func() bool
 	LlamaSupportsGPUOffload func() bool
 )
 
-// Sizes of C structs for allocation
+// Sizes of C structs for allocation.
 const (
 	SizeofLlamaModelParams   = 80
 	SizeofLlamaContextParams = 160
 	SizeofLlamaBatch         = 48
 )
 
+// tryRegister binds a function pointer to a named symbol, returning false if
+// the symbol is not found (instead of panicking like purego.RegisterLibFunc).
+func tryRegister(handle uintptr, fnPtr any, names ...string) bool {
+	for _, name := range names {
+		if _, err := purego.Dlsym(handle, name); err != nil {
+			continue
+		}
+		purego.RegisterLibFunc(fnPtr, handle, name)
+		return true
+	}
+	return false
+}
+
 // RegisterFunctions binds all C API functions from the loaded library.
+// Missing symbols are silently skipped — callers must check function pointers
+// before calling.
 func RegisterFunctions() error {
 	handle := Handle()
 	if handle == 0 {
 		return ErrLibraryNotLoaded
 	}
 
-	// Model management (with struct params - need ffi)
-	// TODO: use ffi for proper struct-by-value support
-	// For now, register as if taking pointer - will crash at runtime for inference
-	purego.RegisterLibFunc(&LlamaModelLoadFromFile, handle, "llama_model_load_from_file")
-	purego.RegisterLibFunc(&LlamaInitFromModel, handle, "llama_init_from_model")
-	purego.RegisterLibFunc(&LlamaDecode, handle, "llama_decode")
-	purego.RegisterLibFunc(&LlamaEncode, handle, "llama_encode")
-	purego.RegisterLibFunc(&LlamaBatchGetOne, handle, "llama_batch_get_one")
-	purego.RegisterLibFunc(&LlamaBatchFree, handle, "llama_batch_free")
+	// Model management
+	tryRegister(handle, &LlamaModelLoadFromFile, "llama_model_load_from_file", "llama_load_model_from_file")
+	tryRegister(handle, &LlamaModelFree, "llama_model_free", "llama_free_model")
+	tryRegister(handle, &LlamaModelDesc, "llama_model_desc")
+	tryRegister(handle, &LlamaModelSize, "llama_model_size")
+	tryRegister(handle, &LlamaModelNVocab, "llama_model_n_vocab", "llama_n_vocab")
+	tryRegister(handle, &LlamaModelNEmbd, "llama_model_n_embd", "llama_n_embd")
+	tryRegister(handle, &LlamaModelNLayer, "llama_model_n_layer", "llama_n_layer")
 
-	// Model management (simple params)
-	purego.RegisterLibFunc(&LlamaModelFree, handle, "llama_model_free")
-	purego.RegisterLibFunc(&LlamaModelDesc, handle, "llama_model_desc")
-	purego.RegisterLibFunc(&LlamaModelSize, handle, "llama_model_size")
-	purego.RegisterLibFunc(&LlamaModelNVocab, handle, "llama_model_n_vocab")
-	purego.RegisterLibFunc(&LlamaModelNEmbd, handle, "llama_model_n_embd")
-	purego.RegisterLibFunc(&LlamaModelNLayer, handle, "llama_model_n_layer")
-
-	// Context management (simple params)
-	purego.RegisterLibFunc(&LlamaFree, handle, "llama_free")
-	purego.RegisterLibFunc(&LlamaNCtx, handle, "llama_n_ctx")
-	purego.RegisterLibFunc(&LlamaNBatch, handle, "llama_n_batch")
-	purego.RegisterLibFunc(&LlamaNSeqMax, handle, "llama_n_seq_max")
-	purego.RegisterLibFunc(&LlamaGetModel, handle, "llama_get_model")
+	// Context management
+	tryRegister(handle, &LlamaInitFromModel, "llama_init_from_model", "llama_new_context_with_model")
+	tryRegister(handle, &LlamaFree, "llama_free")
+	tryRegister(handle, &LlamaNCtx, "llama_n_ctx")
+	tryRegister(handle, &LlamaNBatch, "llama_n_batch")
+	tryRegister(handle, &LlamaNSeqMax, "llama_n_seq_max")
+	tryRegister(handle, &LlamaGetModel, "llama_get_model")
 
 	// Tokenization
-	purego.RegisterLibFunc(&LlamaTokenize, handle, "llama_tokenize")
-	purego.RegisterLibFunc(&LlamaTokenToPiece, handle, "llama_token_to_piece")
-	purego.RegisterLibFunc(&LlamaDetokenize, handle, "llama_detokenize")
+	tryRegister(handle, &LlamaTokenize, "llama_tokenize")
+	tryRegister(handle, &LlamaTokenToPiece, "llama_token_to_piece")
+	tryRegister(handle, &LlamaDetokenize, "llama_detokenize")
 
-	// Special tokens
-	purego.RegisterLibFunc(&LlamaTokenBos, handle, "llama_token_bos")
-	purego.RegisterLibFunc(&LlamaTokenEos, handle, "llama_token_eos")
-	purego.RegisterLibFunc(&LlamaTokenNl, handle, "llama_token_nl")
-	purego.RegisterLibFunc(&LlamaTokenEot, handle, "llama_token_eot")
-	purego.RegisterLibFunc(&LlamaTokenSep, handle, "llama_token_sep")
-	purego.RegisterLibFunc(&LlamaTokenPad, handle, "llama_token_pad")
-	purego.RegisterLibFunc(&LlamaTokenMask, handle, "llama_token_mask")
+	// Special tokens — try new vocab_ names first, then old token_ names
+	tryRegister(handle, &LlamaTokenBos, "llama_vocab_bos", "llama_token_bos")
+	tryRegister(handle, &LlamaTokenEos, "llama_vocab_eos", "llama_token_eos")
+	tryRegister(handle, &LlamaTokenNl, "llama_vocab_nl", "llama_token_nl")
+	tryRegister(handle, &LlamaTokenEot, "llama_vocab_eot", "llama_token_eot")
+	tryRegister(handle, &LlamaTokenSep, "llama_vocab_sep", "llama_token_sep")
+	tryRegister(handle, &LlamaTokenPad, "llama_vocab_pad", "llama_token_pad")
+	tryRegister(handle, &LlamaTokenMask, "llama_vocab_mask", "llama_token_mask")
+
+	// Inference
+	tryRegister(handle, &LlamaDecode, "llama_decode")
+	tryRegister(handle, &LlamaEncode, "llama_encode")
+	tryRegister(handle, &LlamaBatchGetOne, "llama_batch_get_one")
+	tryRegister(handle, &LlamaBatchFree, "llama_batch_free")
 
 	// Sampling
-	purego.RegisterLibFunc(&LlamaSampleTemperature, handle, "llama_sample_temperature")
-	purego.RegisterLibFunc(&LlamaSampleTopK, handle, "llama_sample_top_k")
-	purego.RegisterLibFunc(&LlamaSampleTopP, handle, "llama_sample_top_p")
-	purego.RegisterLibFunc(&LlamaSampleMinP, handle, "llama_sample_min_p")
-	purego.RegisterLibFunc(&LlamaSampleTypical, handle, "llama_sample_typical")
-	purego.RegisterLibFunc(&LlamaSampleRepetitionPenalty, handle, "llama_sample_repetition_penalty")
-	purego.RegisterLibFunc(&LlamaSampleFrequencyPenalty, handle, "llama_sample_frequency_penalty")
-	purego.RegisterLibFunc(&LlamaSamplePresencePenalty, handle, "llama_sample_presence_penalty")
+	tryRegister(handle, &LlamaSampleTemperature, "llama_sample_temperature")
+	tryRegister(handle, &LlamaSampleTopK, "llama_sample_top_k")
+	tryRegister(handle, &LlamaSampleTopP, "llama_sample_top_p")
+	tryRegister(handle, &LlamaSampleMinP, "llama_sample_min_p")
+	tryRegister(handle, &LlamaSampleTypical, "llama_sample_typical")
+	tryRegister(handle, &LlamaSampleRepetitionPenalty, "llama_sample_repetition_penalty")
+	tryRegister(handle, &LlamaSampleFrequencyPenalty, "llama_sample_frequency_penalty")
+	tryRegister(handle, &LlamaSamplePresencePenalty, "llama_sample_presence_penalty")
 
 	// Logits
-	purego.RegisterLibFunc(&LlamaGetLogits, handle, "llama_get_logits")
-	purego.RegisterLibFunc(&LlamaGetLogitsIth, handle, "llama_get_logits_ith")
+	tryRegister(handle, &LlamaGetLogits, "llama_get_logits")
+	tryRegister(handle, &LlamaGetLogitsIth, "llama_get_logits_ith")
 
 	// Backend
-	purego.RegisterLibFunc(&LlamaBackendInit, handle, "llama_backend_init")
-	purego.RegisterLibFunc(&LlamaBackendFree, handle, "llama_backend_free")
-	purego.RegisterLibFunc(&LlamaSupportsMMap, handle, "llama_supports_mmap")
-	purego.RegisterLibFunc(&LlamaSupportsMLock, handle, "llama_supports_mlock")
-	purego.RegisterLibFunc(&LlamaSupportsGPUOffload, handle, "llama_supports_gpu_offload")
+	tryRegister(handle, &LlamaBackendInit, "llama_backend_init")
+	tryRegister(handle, &LlamaBackendFree, "llama_backend_free")
+	tryRegister(handle, &LlamaSupportsMMap, "llama_supports_mmap")
+	tryRegister(handle, &LlamaSupportsMLock, "llama_supports_mlock")
+	tryRegister(handle, &LlamaSupportsGPUOffload, "llama_supports_gpu_offload")
 
 	return nil
 }
@@ -166,5 +176,15 @@ func RegisterFunctions() error {
 func MustRegisterFunctions() {
 	if err := RegisterFunctions(); err != nil {
 		panic("gguf-run: failed to register llama.cpp functions: " + err.Error())
+	}
+}
+
+// checkRequired panics if any of the listed function pointers is nil.
+func checkRequired(fns ...any) {
+	for _, fn := range fns {
+		// Use fmt.Sprintf to check for nil interface
+		if s := fmt.Sprintf("%v", fn); s == "<nil>" {
+			panic("gguf-run: required llama.cpp function not available in loaded library")
+		}
 	}
 }

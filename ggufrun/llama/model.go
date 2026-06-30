@@ -2,6 +2,7 @@ package llama
 
 import (
 	"fmt"
+	"strings"
 )
 
 // Model represents a loaded GGUF model.
@@ -14,9 +15,10 @@ func LoadModel(path string) (*Model, error) {
 	if !IsLoaded() {
 		return nil, ErrLibraryNotLoaded
 	}
+	if LlamaModelLoadFromFile == nil {
+		return nil, fmt.Errorf("llama_model_load_from_file not available in this library version")
+	}
 
-	// Allocate a default-initialized model params buffer on the C heap
-	// TODO: use ffi for proper struct-by-value passing
 	pathBytes := append([]byte(path), 0)
 
 	handle := LlamaModelLoadFromFile(&pathBytes[0], nil)
@@ -29,7 +31,7 @@ func LoadModel(path string) (*Model, error) {
 
 // Free releases the model resources.
 func (m *Model) Free() {
-	if m.handle != 0 {
+	if m.handle != 0 && LlamaModelFree != nil {
 		LlamaModelFree(m.handle)
 		m.handle = 0
 	}
@@ -37,8 +39,10 @@ func (m *Model) Free() {
 
 // NewContext creates a new inference context for this model.
 func (m *Model) NewContext(ctxSize int32) (*Context, error) {
-	// TODO: use ffi for proper struct-by-value passing
-	// Passing nil for params means we get default context params
+	if LlamaInitFromModel == nil {
+		return nil, fmt.Errorf("llama_init_from_model not available in this library version")
+	}
+
 	handle := LlamaInitFromModel(m.handle, nil)
 	if handle == 0 {
 		return nil, fmt.Errorf("failed to create context")
@@ -49,20 +53,39 @@ func (m *Model) NewContext(ctxSize int32) (*Context, error) {
 
 // Info returns model metadata.
 func (m *Model) Info() ModelInfo {
-	var buf [1024]byte
-	LlamaModelDesc(m.handle, &buf[0], 1024)
+	info := ModelInfo{Name: "model"}
 
-	return ModelInfo{
-		Name:      string(buf[:]),
-		NVocab:    LlamaModelNVocab(m.handle),
-		NEmbd:     LlamaModelNEmbd(m.handle),
-		NLayers:   LlamaModelNLayer(m.handle),
-		SizeBytes: int64(LlamaModelSize(m.handle)),
+	var buf [1024]byte
+	if LlamaModelDesc != nil {
+		LlamaModelDesc(m.handle, &buf[0], 1024)
+		info.Description = string(buf[:])
+		// Use first 100 chars as name
+		if name := strings.SplitN(info.Description, " ", 2)[0]; name != "" {
+			info.Name = name
+		}
 	}
+	if LlamaModelNVocab != nil {
+		info.NVocab = LlamaModelNVocab(m.handle)
+	}
+	if LlamaModelNEmbd != nil {
+		info.NEmbd = LlamaModelNEmbd(m.handle)
+	}
+	if LlamaModelNLayer != nil {
+		info.NLayers = LlamaModelNLayer(m.handle)
+	}
+	if LlamaModelSize != nil {
+		info.SizeBytes = int64(LlamaModelSize(m.handle))
+	}
+
+	return info
 }
 
 // Tokenize converts text to tokens.
 func (m *Model) Tokenize(text string, addBos, special bool) ([]int32, error) {
+	if LlamaTokenize == nil {
+		return nil, fmt.Errorf("llama_tokenize not available in this library version")
+	}
+
 	maxTokens := int32(len(text)/2 + 10)
 	tokens := make([]int32, maxTokens)
 
@@ -77,6 +100,10 @@ func (m *Model) Tokenize(text string, addBos, special bool) ([]int32, error) {
 
 // TokenToPiece converts a token to its string representation.
 func (m *Model) TokenToPiece(token int32, lstrip, special bool) string {
+	if LlamaTokenToPiece == nil {
+		return ""
+	}
+
 	var buf [256]byte
 	lstripInt := int32(0)
 	if lstrip {
@@ -147,7 +174,7 @@ type Context struct {
 
 // Free releases the context resources.
 func (c *Context) Free() {
-	if c.handle != 0 {
+	if c.handle != 0 && LlamaFree != nil {
 		LlamaFree(c.handle)
 		c.handle = 0
 	}
@@ -160,12 +187,6 @@ func (c *Context) Model() *Model {
 
 // Generate runs generation - NOT YET IMPLEMENTED (needs ffi for struct passing).
 func (c *Context) Generate(opts GenerateOptions) (string, error) {
-	// TODO: implement using ffi for struct-by-value support
-	// This requires:
-	//   1. llama_batch_get_one to create a batch
-	//   2. llama_decode to process it
-	//   3. llama_get_logits_ith to get logits
-	//   4. sampling functions
 	return "", fmt.Errorf("inference via purego not yet implemented - needs ffi struct support")
 }
 
