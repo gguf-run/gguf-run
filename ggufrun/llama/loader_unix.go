@@ -59,6 +59,7 @@ func LoadEmbedded() error {
 	systemPaths := []string{
 		"/usr/local/lib/" + libName,
 		"/usr/lib/" + libName,
+		"/usr/lib/llama.cpp/" + libName,
 		filepath.Join(os.Getenv("HOME"), ".local", "lib", libName),
 	}
 	if ld := os.Getenv("LD_LIBRARY_PATH"); ld != "" {
@@ -68,19 +69,33 @@ func LoadEmbedded() error {
 	}
 
 	for _, path := range systemPaths {
-		if _, err := os.Stat(path); err == nil {
-			handle, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL)
-			if err == nil {
-				libHandle = handle
-				libPath = path
-				isLoaded = true
-				return nil
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		// Pre-load dependencies from the same directory
+		dir := filepath.Dir(path)
+		for _, depName := range libDeps() {
+			depPath := filepath.Join(dir, depName)
+			if _, err := os.Stat(depPath); err == nil {
+				purego.Dlopen(depPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
 			}
+		}
+		handle, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+		if err == nil {
+			libHandle = handle
+			libPath = path
+			isLoaded = true
+			return nil
 		}
 	}
 
-	// Search current directory
+	// Search current directory with dependencies
 	if _, err := os.Stat(libName); err == nil {
+		for _, depName := range libDeps() {
+			if _, err := os.Stat(depName); err == nil {
+				purego.Dlopen(depName, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+			}
+		}
 		handle, err := purego.Dlopen(libName, purego.RTLD_NOW|purego.RTLD_GLOBAL)
 		if err == nil {
 			libHandle = handle
